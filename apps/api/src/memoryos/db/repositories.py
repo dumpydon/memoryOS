@@ -20,7 +20,7 @@ from datetime import UTC, datetime
 from typing import Any, cast
 from uuid import UUID
 
-from sqlalchemy import Select, and_, case, func, or_, select
+from sqlalchemy import Select, and_, case, func, literal, or_, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
@@ -946,12 +946,17 @@ class MemoryRepository:
         attribute_match = (
             (Memory.attribute_key == attribute_key)
             if attribute_key is not None
-            else cast(Any, False)
+            else literal(False)
         )
         context_match = (
-            (Memory.context_key == context_key) if context_key is not None else cast(Any, False)
+            (Memory.context_key == context_key) if context_key is not None else literal(False)
         )
-        match_score = case((attribute_match, 2), (context_match, 1), else_=0).label("match_score")
+        match_score = case(
+            (and_(attribute_match, context_match), 3),
+            (attribute_match, 2),
+            (context_match, 1),
+            else_=0,
+        ).label("match_score")
         if vector is not None:
             similarity = (1 - Memory.embedding.cosine_distance(vector)).label("raw_similarity")
             stmt = (

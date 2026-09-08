@@ -307,3 +307,14 @@ def test_exact_pgvector_recall_filters_scope_mode_expiry_and_model(db):
         assert candidates[0].record.content == "matching"
         assert candidates[0].raw_similarity == pytest.approx(1.0)
         assert len(candidates[0].embedding) == VECTOR_DIMENSIONS
+        # Optional identity keys must still produce valid SQL for graph candidates.
+        related = repo.related_candidates(
+            scope_id=scope_id,
+            query_embedding=_vector(),
+            embedding_model="demo-fixture-v1",
+            as_of=now,
+            limit=5,
+        )
+        assert [item.record.content for item in related] == ["matching"]
+        assert not related[0].attribute_match
+        assert not related[0].context_match
