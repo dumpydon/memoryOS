@@ -33,6 +33,9 @@
   --warning-soft: #fffaf1;
   --primary: #282e3a;
   --primary-foreground: #ffffff;
+  --sidebar-width: 242px;
+  --curtain-height: clamp(240px, 38vh, 360px);
+  --font-wordmark: ui-monospace, "SFMono-Regular", Menlo, monospace;
 }
 
 * {
@@ -64,7 +67,7 @@ a {
   min-height: 100vh;
 }
 .sidebar {
-  width: 242px;
+  width: var(--sidebar-width);
   min-height: 100vh;
   border-right: 1px solid var(--line);
   background: var(--sidebar);
@@ -227,6 +230,50 @@ a {
 .main-canvas {
   flex: 1;
   min-width: 0;
+}
+.memoryos-shell {
+  position: relative;
+  min-height: 100vh;
+}
+.footer-curtain-content {
+  position: relative;
+  z-index: 1;
+  background: var(--canvas);
+}
+.footer-curtain-stage {
+  position: fixed;
+  z-index: 0;
+  inset: auto 0 0 var(--sidebar-width);
+  display: grid;
+  width: auto;
+  height: var(--curtain-height);
+  place-items: center;
+  overflow: hidden;
+  pointer-events: none;
+  background: var(--canvas);
+}
+.footer-curtain-stage .dot-wordmark-section {
+  width: 90%;
+  height: 90%;
+  margin: 0;
+}
+.footer-curtain-spacer {
+  position: relative;
+  z-index: 0;
+  height: calc(var(--curtain-height) + 10px);
+  min-height: 250px;
+  background: transparent;
+}
+.dot-wordmark-section {
+  position: relative;
+  width: 100%;
+  height: 100%;
+  overflow: hidden;
+}
+.dot-wordmark-canvas {
+  display: block;
+  width: 100%;
+  height: 100%;
 }
 .page-wrap {
   max-width: 1220px;
@@ -607,8 +654,11 @@ h1 {
 }
 
 @media (max-width: 950px) {
+  :root {
+    --sidebar-width: 205px;
+  }
   .sidebar {
-    width: 205px;
+    width: var(--sidebar-width);
   }
   .page-wrap {
     padding: 29px 27px 45px;
@@ -621,8 +671,12 @@ h1 {
   }
 }
 @media (max-width: 640px) {
+  :root {
+    --sidebar-width: 62px;
+    --curtain-height: clamp(200px, 32vh, 280px);
+  }
   .sidebar {
-    width: 62px;
+    width: var(--sidebar-width);
     padding: 20px 9px;
   }
   .brand-lockup {
@@ -2821,6 +2875,17 @@ h1 {
 }
 :root[data-theme="dark"] .appearance-menu {
   box-shadow: 0 12px 28px rgb(0 0 0 / 32%);
+}
+
+/* Keep keyboard focus visible on controls whose hover state already owns an outline. */
+.nav-item:focus-visible,
+.back-link:focus-visible,
+.filter-chip:focus-visible,
+.query-preset:focus-visible,
+.mode-option:focus-visible,
+.appearance-control summary:focus-visible {
+  outline: 2px solid var(--focus-ring);
+  outline-offset: 2px;
 }
 
 @media (max-width: 640px) {
