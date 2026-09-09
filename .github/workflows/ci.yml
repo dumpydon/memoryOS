@@ -1,0 +1,113 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  api:
+    name: API checks
+    runs-on: ubuntu-latest
+    env:
+      APP_ENV: test
+      DATABASE_URL: postgresql+psycopg://memoryos:memoryos@localhost:5432/memoryos
+      TEST_DATABASE_URL: postgresql+psycopg://memoryos:memoryos@localhost:5432/memoryos
+      OWNER_API_TOKEN: ci-owner-token
+      EXECUTION_MODE: demo
+      WEB_ORIGIN: http://localhost:3000
+    services:
+      postgres:
+        image: pgvector/pgvector:pg17
+        env:
+          POSTGRES_USER: memoryos
+          POSTGRES_PASSWORD: memoryos
+          POSTGRES_DB: memoryos
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U memoryos -d memoryos"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 12
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - uses: astral-sh/setup-uv@v6
+        with:
+          version: "0.12.10"
+      - name: Install locked API dependencies
+        working-directory: apps/api
+        run: uv sync --frozen --extra dev
+      - name: Lint
+        working-directory: apps/api
+        run: uv run ruff check src tests
+      - name: Type check
+        working-directory: apps/api
+        run: uv run mypy src
+      - name: Apply migrations
+        working-directory: apps/api
+        run: uv run alembic upgrade head
+      - name: Test
+        working-directory: apps/api
+        run: uv run pytest -q
+
+  web:
+    name: Web checks
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 11.19.0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+      - name: Install locked workspace dependencies
+        run: pnpm install --frozen-lockfile
+      - name: Lint
+        working-directory: apps/web
+        run: pnpm lint
+      - name: Type check
+        working-directory: apps/web
+        run: pnpm typecheck
+      - name: Production build
+        working-directory: apps/web
+        run: pnpm build
+
+  contracts:
+    name: OpenAPI contract freshness
+    runs-on: ubuntu-latest
+    needs: [api]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - uses: astral-sh/setup-uv@v6
+        with:
+          version: "0.12.10"
+      - name: Install API dependencies
+        working-directory: apps/api
+        run: uv sync --frozen
+      - name: Export OpenAPI
+        run: uv run --project apps/api python scripts/export_openapi.py --output contracts/openapi.json
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 11.19.0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - name: Generate TypeScript API types
+        working-directory: apps/web
+        run: pnpm --filter memoryos-web exec openapi-typescript ../../contracts/openapi.json -o lib/generated/api.ts
+      - name: Check generated contract files
+        run: git diff --exit-code -- contracts/openapi.json apps/web/lib/generated/api.ts

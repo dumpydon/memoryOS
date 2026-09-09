@@ -1,29 +1,93 @@
 # MemoryOS
 
-MemoryOS is a small, explainable long-term memory layer for AI agents. It decides which facts are worth remembering, tracks preference/semantic/episodic/procedural memories, preserves superseded history, and recalls memories with a transparent score instead of vector similarity alone.
+MemoryOS is an explainable long-term memory layer for AI agents. It decides which interaction details are worth remembering, classifies them as preference/semantic/episodic/procedural, preserves superseded history, and recalls memories with a transparent score that combines similarity, importance, recency, reinforcement, and confidence.
 
-The repository is intentionally split into a Next.js engineering dashboard and a Python service. Both REST and MCP call the same Python business services. The public demo uses recorded provider outputs and real policy/ranking execution so it does not require an LLM key.
+It is a portfolio-sized engineering system, not a chatbot. The Next.js dashboard shows the memory lifecycle and Recall Lab exposes why a result moved. FastAPI, PostgreSQL/pgvector, LangGraph, REST, and MCP share one Python service layer.
 
-## Repository map
+## What to explore
 
-- `apps/api`: FastAPI, Pydantic contracts, LangGraph orchestration, persistence adapters, and MCP tools.
-- `apps/web`: Next.js App Router dashboard.
-- `contracts`: API and domain contract notes shared by workers.
-- `docs`: architecture, policy, and deployment notes.
-- `fixtures`: demo interactions and evaluation cases.
+- **Overview** — live counts, memory type composition, disputes, reinforcement, and recent events.
+- **Memory Explorer** — search/filter active and historical memories.
+- **Memory detail** — immutable lineage versions, evidence, and audit timeline.
+- **Ingestion Playground** — demo fixture scenarios, preview/commit behavior, structured candidates, policy decisions, and node timings.
+- **Recall Lab** — a fair comparison between naive cosine retrieval and MemoryOS ranking with component contributions.
+- **MCP** — `remember`, `recall`, `forget`, and `list_memories` over the same services as REST.
 
-## Local start
+## Five-minute local start
 
-1. Copy `.env.example` to `.env`.
-2. Start PostgreSQL/pgvector with `docker compose up -d postgres`.
-3. Install Python dependencies with `uv sync` from `apps/api` (or `python -m pip install -e '.[dev]'`).
-4. Apply migrations with `alembic upgrade head` from `apps/api` once migrations exist.
-5. Start the API with `uv run uvicorn memoryos.main:app --reload --port 8000`.
-6. In another terminal, run `pnpm --dir apps/web install` and `pnpm --dir apps/web dev`.
+Requirements: Python 3.12, uv, Node 22, pnpm 11.19, and Docker with a PostgreSQL/pgvector image.
 
-Demo mode is the default and does not call OpenAI. Live mode requires `OPENAI_API_KEY` and should be enabled deliberately.
+```bash
+cp .env.example .env
+docker compose up -d postgres
+cd apps/api
+uv sync --extra dev
+uv run alembic upgrade head
+uv run memoryos-seed
+uv run uvicorn memoryos.main:app --reload --host 0.0.0.0 --port 8000
+```
 
-## Design boundary
+In a second terminal:
 
-The model proposes candidate memories and relationships. Deterministic domain policies validate those proposals, calculate decay/ranking, and persist an auditable event. Read `docs/contracts.md` before changing shared request/response shapes.
+```bash
+pnpm install
+pnpm --dir apps/web dev
+```
 
+Open [http://localhost:3000](http://localhost:3000). Demo mode uses authored deterministic fixture providers and requires no OpenAI key. Copy `apps/web/.env.example` only when the API runs at a non-default origin.
+
+## API and MCP
+
+The REST API is versioned under `/v1`:
+
+| Surface | Purpose |
+|---|---|
+| `POST /v1/interactions` | Preview or commit one interaction |
+| `GET /v1/memories` | Explore scoped memories |
+| `GET /v1/memories/{id}/history` | Read immutable versions/events |
+| `POST /v1/recall` | Explainable MemoryOS retrieval |
+| `POST /v1/recall/compare` | Same-snapshot naive vs MemoryOS ranking |
+| `POST /v1/memories/{id}/forget` | Soft-forget a lineage while preserving history |
+| `GET /v1/overview` | Dashboard metrics and recent events |
+| `GET /v1/demo/scenarios` | Finite public fixture catalog |
+
+Run the local MCP stdio server from `apps/api`:
+
+```bash
+OWNER_API_TOKEN=memoryos-local-token uv run memoryos-mcp
+```
+
+The deployed Streamable HTTP endpoint is `/mcp`. Public demo access is limited to the fixed demo scope and allowlisted scenarios/queries. Mutations, arbitrary input, live mode, and the private live scope require the owner token.
+
+## Architecture and policy
+
+Read [docs/architecture.md](docs/architecture.md) for the service boundaries and graph. The core recall policy is:
+
+```text
+score = 0.55 similarity + 0.15 importance + 0.10 recency
+        + 0.10 reinforcement + 0.10 confidence
+```
+
+Half-lives start at 180 days for preferences, 365 for semantic facts, 30 for episodic memories, and 180 for procedures. Confidence is a bounded heuristic evidence-strength score, not a calibrated probability. Forgetting is a soft lineage state; it preserves audit history and is not privacy erasure.
+
+## Tests and checks
+
+```bash
+cd apps/api
+uv run ruff check src tests
+uv run mypy src
+uv run pytest -q
+
+cd ../..
+pnpm --dir apps/web lint
+pnpm --dir apps/web typecheck
+pnpm --dir apps/web build
+```
+
+The PostgreSQL integration tests use `TEST_DATABASE_URL` when supplied. CI starts a pgvector PostgreSQL 17 service and sets that variable, so database tests do not silently skip there. OpenAPI is exported from the FastAPI app and TypeScript types are generated with `openapi-typescript`; the generated files are checked for drift.
+
+## Free-tier deployment
+
+Use Vercel for the frontend, Render Free for the Dockerized API/MCP service, and Neon for PostgreSQL/pgvector. Follow [docs/deployment.md](docs/deployment.md) for Neon TLS configuration, one-time migrations/seed, Render environment variables, Vercel `NEXT_PUBLIC_API_BASE_URL`, and CORS.
+
+The repository does not claim a completed cloud deployment or verified live model calls without a provider key. Render cold starts and provider costs are expected; demo mode keeps the public walkthrough deterministic and no-key.

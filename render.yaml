@@ -1,0 +1,42 @@
+# https://render.com/schema/render.yaml.json
+# One free Docker web service. PostgreSQL is intentionally external (Neon).
+services:
+  - type: web
+    name: memoryos-api
+    runtime: docker
+    rootDir: apps/api
+    dockerfilePath: ./Dockerfile
+    dockerContext: .
+    plan: free
+    region: oregon
+    healthCheckPath: /health/ready
+    autoDeployTrigger: checksPass
+    envVars:
+      - key: APP_ENV
+        value: production
+      - key: API_HOST
+        value: 0.0.0.0
+      - key: DATABASE_URL
+        sync: false
+      - key: OWNER_API_TOKEN
+        generateValue: true
+      - key: WEB_ORIGIN
+        sync: false
+      - key: EXECUTION_MODE
+        value: demo
+      - key: OPENAI_API_KEY
+        sync: false
+      - key: OPENAI_MODEL
+        value: gpt-4.1-mini
+      - key: EMBEDDING_MODEL
+        value: text-embedding-3-small
+      - key: EMBEDDING_DIMENSIONS
+        value: "1536"
+      - key: DEMO_EMBEDDING_MODEL
+        value: demo-fixture-v1
+      - key: DEMO_EMBEDDING_DIMENSIONS
+        value: "1536"
+      - key: PROVIDER_TIMEOUT_SECONDS
+        value: "30"
+      - key: MAX_INTERACTION_CHARS
+        value: "20000"

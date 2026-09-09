@@ -50,11 +50,12 @@ class MemoryEvent(ContractModel):
     reason_summary: str
     before: dict[str, Any] | None = None
     after: dict[str, Any] | None = None
+    memory_content: str | None = None
     created_at: datetime
 
 
 class MemoryListItem(MemoryRecord):
-    """List rows intentionally share the full record shape in T0."""
+    """Explorer rows share the full public memory record shape."""
 
 
 class MemoryListResponse(ContractModel):

@@ -23,3 +23,4 @@ apps/web/.next/
 apps/web/out/
 apps/web/coverage/
 *.log
+*.tsbuildinfo

@@ -8,7 +8,11 @@ from pydantic import BaseModel, ConfigDict, Field
 
 
 class ContractModel(BaseModel):
-    model_config = ConfigDict(extra="forbid", populate_by_name=True)
+    model_config = ConfigDict(
+        extra="forbid",
+        populate_by_name=True,
+        json_schema_serialization_defaults_required=True,
+    )
 
 
 class ScopeRef(ContractModel):

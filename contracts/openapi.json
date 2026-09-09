@@ -1,0 +1,2391 @@
+{
+  "components": {
+    "schemas": {
+      "ApiHealth": {
+        "additionalProperties": false,
+        "properties": {
+          "checked_at": {
+            "format": "date-time",
+            "title": "Checked At",
+            "type": "string"
+          },
+          "details": {
+            "additionalProperties": true,
+            "title": "Details",
+            "type": "object"
+          },
+          "service": {
+            "default": "memoryos-api",
+            "title": "Service",
+            "type": "string"
+          },
+          "status": {
+            "title": "Status",
+            "type": "string"
+          }
+        },
+        "required": [
+          "status",
+          "service",
+          "checked_at",
+          "details"
+        ],
+        "title": "ApiHealth",
+        "type": "object"
+      },
+      "CandidateMemory": {
+        "additionalProperties": false,
+        "properties": {
+          "attribute_key": {
+            "anyOf": [
+              {
+                "maxLength": 255,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Attribute Key"
+          },
+          "candidate_id": {
+            "maxLength": 100,
+            "minLength": 1,
+            "title": "Candidate Id",
+            "type": "string"
+          },
+          "confidence": {
+            "maximum": 1.0,
+            "minimum": 0.0,
+            "title": "Confidence",
+            "type": "number"
+          },
+          "content": {
+            "maxLength": 2000,
+            "minLength": 1,
+            "title": "Content",
+            "type": "string"
+          },
+          "context_key": {
+            "anyOf": [
+              {
+                "maxLength": 255,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Context Key"
+          },
+          "effective_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Effective At"
+          },
+          "evidence_excerpt": {
+            "maxLength": 1000,
+            "minLength": 1,
+            "title": "Evidence Excerpt",
+            "type": "string"
+          },
+          "expires_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Expires At"
+          },
+          "importance": {
+            "maximum": 1.0,
+            "minimum": 0.0,
+            "title": "Importance",
+            "type": "number"
+          },
+          "memory_type": {
+            "$ref": "#/components/schemas/MemoryType"
+          },
+          "skip_reason": {
+            "anyOf": [
+              {
+                "maxLength": 500,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Skip Reason"
+          },
+          "subject": {
+            "anyOf": [
+              {
+                "maxLength": 255,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Subject"
+          },
+          "worth_remembering": {
+            "default": true,
+            "title": "Worth Remembering",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "candidate_id",
+          "content",
+          "memory_type",
+          "subject",
+          "context_key",
+          "attribute_key",
+          "importance",
+          "confidence",
+          "evidence_excerpt",
+          "effective_at",
+          "expires_at",
+          "worth_remembering",
+          "skip_reason"
+        ],
+        "title": "CandidateMemory",
+        "type": "object"
+      },
+      "DemoCatalogResponse": {
+        "additionalProperties": false,
+        "properties": {
+          "embedding_model": {
+            "title": "Embedding Model",
+            "type": "string"
+          },
+          "notice": {
+            "title": "Notice",
+            "type": "string"
+          },
+          "queries": {
+            "items": {
+              "$ref": "#/components/schemas/DemoQuery"
+            },
+            "title": "Queries",
+            "type": "array"
+          },
+          "scenarios": {
+            "items": {
+              "$ref": "#/components/schemas/DemoScenario"
+            },
+            "title": "Scenarios",
+            "type": "array"
+          },
+          "scope_id": {
+            "format": "uuid",
+            "title": "Scope Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "scope_id",
+          "embedding_model",
+          "notice",
+          "scenarios",
+          "queries"
+        ],
+        "title": "DemoCatalogResponse",
+        "type": "object"
+      },
+      "DemoQuery": {
+        "additionalProperties": false,
+        "properties": {
+          "id": {
+            "title": "Id",
+            "type": "string"
+          },
+          "query": {
+            "title": "Query",
+            "type": "string"
+          },
+          "title": {
+            "title": "Title",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "title",
+          "query"
+        ],
+        "title": "DemoQuery",
+        "type": "object"
+      },
+      "DemoScenario": {
+        "additionalProperties": false,
+        "properties": {
+          "description": {
+            "title": "Description",
+            "type": "string"
+          },
+          "expected_outcome": {
+            "title": "Expected Outcome",
+            "type": "string"
+          },
+          "id": {
+            "title": "Id",
+            "type": "string"
+          },
+          "text": {
+            "title": "Text",
+            "type": "string"
+          },
+          "title": {
+            "title": "Title",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "title",
+          "description",
+          "text",
+          "expected_outcome"
+        ],
+        "title": "DemoScenario",
+        "type": "object"
+      },
+      "ExecutionMode": {
+        "enum": [
+          "demo",
+          "live"
+        ],
+        "title": "ExecutionMode",
+        "type": "string"
+      },
+      "ForgetMemoryRequest": {
+        "additionalProperties": false,
+        "properties": {
+          "reason": {
+            "default": "Forgotten by owner",
+            "maxLength": 500,
+            "minLength": 1,
+            "title": "Reason",
+            "type": "string"
+          }
+        },
+        "title": "ForgetMemoryRequest",
+        "type": "object"
+      },
+      "ForgetMemoryResponse": {
+        "additionalProperties": false,
+        "properties": {
+          "forgotten_memory_ids": {
+            "items": {
+              "format": "uuid",
+              "type": "string"
+            },
+            "title": "Forgotten Memory Ids",
+            "type": "array"
+          },
+          "lineage_id": {
+            "format": "uuid",
+            "title": "Lineage Id",
+            "type": "string"
+          },
+          "reason": {
+            "title": "Reason",
+            "type": "string"
+          }
+        },
+        "required": [
+          "lineage_id",
+          "forgotten_memory_ids",
+          "reason"
+        ],
+        "title": "ForgetMemoryResponse",
+        "type": "object"
+      },
+      "HTTPValidationError": {
+        "properties": {
+          "detail": {
+            "items": {
+              "$ref": "#/components/schemas/ValidationError"
+            },
+            "title": "Detail",
+            "type": "array"
+          }
+        },
+        "title": "HTTPValidationError",
+        "type": "object"
+      },
+      "IngestDecision": {
+        "additionalProperties": false,
+        "properties": {
+          "candidate_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Candidate Id"
+          },
+          "confidence": {
+            "anyOf": [
+              {
+                "maximum": 1.0,
+                "minimum": 0.0,
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Confidence"
+          },
+          "decision_type": {
+            "$ref": "#/components/schemas/IngestDecisionType"
+          },
+          "memory_id": {
+            "anyOf": [
+              {
+                "format": "uuid",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Memory Id"
+          },
+          "reason_code": {
+            "title": "Reason Code",
+            "type": "string"
+          },
+          "reason_summary": {
+            "title": "Reason Summary",
+            "type": "string"
+          },
+          "related_memory_id": {
+            "anyOf": [
+              {
+                "format": "uuid",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Related Memory Id"
+          }
+        },
+        "required": [
+          "decision_type",
+          "candidate_id",
+          "memory_id",
+          "related_memory_id",
+          "reason_code",
+          "reason_summary",
+          "confidence"
+        ],
+        "title": "IngestDecision",
+        "type": "object"
+      },
+      "IngestDecisionType": {
+        "enum": [
+          "created",
+          "reinforced",
+          "superseded",
+          "disputed",
+          "skipped",
+          "rejected"
+        ],
+        "title": "IngestDecisionType",
+        "type": "string"
+      },
+      "IngestInteractionRequest": {
+        "additionalProperties": false,
+        "properties": {
+          "idempotency_key": {
+            "anyOf": [
+              {
+                "maxLength": 255,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Idempotency Key"
+          },
+          "metadata": {
+            "additionalProperties": true,
+            "title": "Metadata",
+            "type": "object"
+          },
+          "mode": {
+            "$ref": "#/components/schemas/ExecutionMode",
+            "default": "demo"
+          },
+          "occurred_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Occurred At"
+          },
+          "preview": {
+            "default": false,
+            "title": "Preview",
+            "type": "boolean"
+          },
+          "scope_id": {
+            "format": "uuid",
+            "title": "Scope Id",
+            "type": "string"
+          },
+          "source_ref": {
+            "anyOf": [
+              {
+                "maxLength": 512,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Source Ref"
+          },
+          "text": {
+            "maxLength": 20000,
+            "minLength": 1,
+            "title": "Text",
+            "type": "string"
+          }
+        },
+        "required": [
+          "scope_id",
+          "text"
+        ],
+        "title": "IngestInteractionRequest",
+        "type": "object"
+      },
+      "IngestInteractionResponse": {
+        "additionalProperties": false,
+        "properties": {
+          "candidates": {
+            "items": {
+              "$ref": "#/components/schemas/CandidateMemory"
+            },
+            "title": "Candidates",
+            "type": "array"
+          },
+          "decisions": {
+            "items": {
+              "$ref": "#/components/schemas/IngestDecision"
+            },
+            "title": "Decisions",
+            "type": "array"
+          },
+          "interaction_id": {
+            "format": "uuid",
+            "title": "Interaction Id",
+            "type": "string"
+          },
+          "memory_ids": {
+            "items": {
+              "format": "uuid",
+              "type": "string"
+            },
+            "title": "Memory Ids",
+            "type": "array"
+          },
+          "mode": {
+            "$ref": "#/components/schemas/ExecutionMode"
+          },
+          "scope_id": {
+            "format": "uuid",
+            "title": "Scope Id",
+            "type": "string"
+          },
+          "status": {
+            "$ref": "#/components/schemas/InteractionStatus"
+          },
+          "trace": {
+            "$ref": "#/components/schemas/InteractionTrace"
+          },
+          "warnings": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Warnings",
+            "type": "array"
+          }
+        },
+        "required": [
+          "interaction_id",
+          "scope_id",
+          "status",
+          "mode",
+          "candidates",
+          "decisions",
+          "memory_ids",
+          "warnings",
+          "trace"
+        ],
+        "title": "IngestInteractionResponse",
+        "type": "object"
+      },
+      "InteractionStatus": {
+        "enum": [
+          "received",
+          "processing",
+          "completed",
+          "preview",
+          "failed"
+        ],
+        "title": "InteractionStatus",
+        "type": "string"
+      },
+      "InteractionTrace": {
+        "additionalProperties": false,
+        "properties": {
+          "policy_version": {
+            "title": "Policy Version",
+            "type": "string"
+          },
+          "provider_mode": {
+            "$ref": "#/components/schemas/ExecutionMode"
+          },
+          "steps": {
+            "items": {
+              "$ref": "#/components/schemas/TraceStep"
+            },
+            "title": "Steps",
+            "type": "array"
+          }
+        },
+        "required": [
+          "steps",
+          "policy_version",
+          "provider_mode"
+        ],
+        "title": "InteractionTrace",
+        "type": "object"
+      },
+      "MemoryEvent": {
+        "additionalProperties": false,
+        "properties": {
+          "after": {
+            "anyOf": [
+              {
+                "additionalProperties": true,
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "After"
+          },
+          "before": {
+            "anyOf": [
+              {
+                "additionalProperties": true,
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Before"
+          },
+          "created_at": {
+            "format": "date-time",
+            "title": "Created At",
+            "type": "string"
+          },
+          "event_type": {
+            "$ref": "#/components/schemas/MemoryEventType"
+          },
+          "evidence_excerpt": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Evidence Excerpt"
+          },
+          "id": {
+            "format": "uuid",
+            "title": "Id",
+            "type": "string"
+          },
+          "interaction_id": {
+            "anyOf": [
+              {
+                "format": "uuid",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Interaction Id"
+          },
+          "memory_content": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Memory Content"
+          },
+          "memory_id": {
+            "format": "uuid",
+            "title": "Memory Id",
+            "type": "string"
+          },
+          "reason_code": {
+            "title": "Reason Code",
+            "type": "string"
+          },
+          "reason_summary": {
+            "title": "Reason Summary",
+            "type": "string"
+          },
+          "related_memory_id": {
+            "anyOf": [
+              {
+                "format": "uuid",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Related Memory Id"
+          },
+          "scope_id": {
+            "format": "uuid",
+            "title": "Scope Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "scope_id",
+          "memory_id",
+          "interaction_id",
+          "event_type",
+          "related_memory_id",
+          "evidence_excerpt",
+          "reason_code",
+          "reason_summary",
+          "before",
+          "after",
+          "memory_content",
+          "created_at"
+        ],
+        "title": "MemoryEvent",
+        "type": "object"
+      },
+      "MemoryEventType": {
+        "enum": [
+          "created",
+          "reinforced",
+          "superseded",
+          "disputed",
+          "forgotten",
+          "resolved",
+          "expired"
+        ],
+        "title": "MemoryEventType",
+        "type": "string"
+      },
+      "MemoryHistoryResponse": {
+        "additionalProperties": false,
+        "properties": {
+          "events": {
+            "items": {
+              "$ref": "#/components/schemas/MemoryEvent"
+            },
+            "title": "Events",
+            "type": "array"
+          },
+          "lineage_id": {
+            "format": "uuid",
+            "title": "Lineage Id",
+            "type": "string"
+          },
+          "versions": {
+            "items": {
+              "$ref": "#/components/schemas/MemoryVersion"
+            },
+            "title": "Versions",
+            "type": "array"
+          }
+        },
+        "required": [
+          "lineage_id",
+          "versions",
+          "events"
+        ],
+        "title": "MemoryHistoryResponse",
+        "type": "object"
+      },
+      "MemoryListItem": {
+        "additionalProperties": false,
+        "description": "Explorer rows share the full public memory record shape.",
+        "properties": {
+          "attribute_key": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Attribute Key"
+          },
+          "confidence": {
+            "maximum": 1.0,
+            "minimum": 0.0,
+            "title": "Confidence",
+            "type": "number"
+          },
+          "content": {
+            "title": "Content",
+            "type": "string"
+          },
+          "context_key": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Context Key"
+          },
+          "created_at": {
+            "format": "date-time",
+            "title": "Created At",
+            "type": "string"
+          },
+          "effective_at": {
+            "format": "date-time",
+            "title": "Effective At",
+            "type": "string"
+          },
+          "embedding_dimensions": {
+            "minimum": 1.0,
+            "title": "Embedding Dimensions",
+            "type": "integer"
+          },
+          "embedding_model": {
+            "minLength": 1,
+            "title": "Embedding Model",
+            "type": "string"
+          },
+          "expires_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Expires At"
+          },
+          "id": {
+            "format": "uuid",
+            "title": "Id",
+            "type": "string"
+          },
+          "importance": {
+            "maximum": 1.0,
+            "minimum": 0.0,
+            "title": "Importance",
+            "type": "number"
+          },
+          "last_confirmed_at": {
+            "format": "date-time",
+            "title": "Last Confirmed At",
+            "type": "string"
+          },
+          "lineage_id": {
+            "format": "uuid",
+            "title": "Lineage Id",
+            "type": "string"
+          },
+          "memory_type": {
+            "$ref": "#/components/schemas/MemoryType"
+          },
+          "reinforcement_count": {
+            "minimum": 0.0,
+            "title": "Reinforcement Count",
+            "type": "integer"
+          },
+          "scope_id": {
+            "format": "uuid",
+            "title": "Scope Id",
+            "type": "string"
+          },
+          "status": {
+            "$ref": "#/components/schemas/MemoryStatus"
+          },
+          "subject": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Subject"
+          },
+          "superseded_by_id": {
+            "anyOf": [
+              {
+                "format": "uuid",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Superseded By Id"
+          },
+          "version": {
+            "minimum": 1.0,
+            "title": "Version",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "id",
+          "scope_id",
+          "lineage_id",
+          "version",
+          "content",
+          "memory_type",
+          "status",
+          "subject",
+          "context_key",
+          "attribute_key",
+          "importance",
+          "confidence",
+          "reinforcement_count",
+          "embedding_model",
+          "embedding_dimensions",
+          "created_at",
+          "effective_at",
+          "last_confirmed_at",
+          "expires_at",
+          "superseded_by_id"
+        ],
+        "title": "MemoryListItem",
+        "type": "object"
+      },
+      "MemoryListResponse": {
+        "additionalProperties": false,
+        "properties": {
+          "items": {
+            "items": {
+              "$ref": "#/components/schemas/MemoryListItem"
+            },
+            "title": "Items",
+            "type": "array"
+          },
+          "page": {
+            "$ref": "#/components/schemas/PageInfo"
+          },
+          "total": {
+            "minimum": 0.0,
+            "title": "Total",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "items",
+          "page",
+          "total"
+        ],
+        "title": "MemoryListResponse",
+        "type": "object"
+      },
+      "MemoryRecord": {
+        "additionalProperties": false,
+        "properties": {
+          "attribute_key": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Attribute Key"
+          },
+          "confidence": {
+            "maximum": 1.0,
+            "minimum": 0.0,
+            "title": "Confidence",
+            "type": "number"
+          },
+          "content": {
+            "title": "Content",
+            "type": "string"
+          },
+          "context_key": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Context Key"
+          },
+          "created_at": {
+            "format": "date-time",
+            "title": "Created At",
+            "type": "string"
+          },
+          "effective_at": {
+            "format": "date-time",
+            "title": "Effective At",
+            "type": "string"
+          },
+          "embedding_dimensions": {
+            "minimum": 1.0,
+            "title": "Embedding Dimensions",
+            "type": "integer"
+          },
+          "embedding_model": {
+            "minLength": 1,
+            "title": "Embedding Model",
+            "type": "string"
+          },
+          "expires_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Expires At"
+          },
+          "id": {
+            "format": "uuid",
+            "title": "Id",
+            "type": "string"
+          },
+          "importance": {
+            "maximum": 1.0,
+            "minimum": 0.0,
+            "title": "Importance",
+            "type": "number"
+          },
+          "last_confirmed_at": {
+            "format": "date-time",
+            "title": "Last Confirmed At",
+            "type": "string"
+          },
+          "lineage_id": {
+            "format": "uuid",
+            "title": "Lineage Id",
+            "type": "string"
+          },
+          "memory_type": {
+            "$ref": "#/components/schemas/MemoryType"
+          },
+          "reinforcement_count": {
+            "minimum": 0.0,
+            "title": "Reinforcement Count",
+            "type": "integer"
+          },
+          "scope_id": {
+            "format": "uuid",
+            "title": "Scope Id",
+            "type": "string"
+          },
+          "status": {
+            "$ref": "#/components/schemas/MemoryStatus"
+          },
+          "subject": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Subject"
+          },
+          "superseded_by_id": {
+            "anyOf": [
+              {
+                "format": "uuid",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Superseded By Id"
+          },
+          "version": {
+            "minimum": 1.0,
+            "title": "Version",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "id",
+          "scope_id",
+          "lineage_id",
+          "version",
+          "content",
+          "memory_type",
+          "status",
+          "subject",
+          "context_key",
+          "attribute_key",
+          "importance",
+          "confidence",
+          "reinforcement_count",
+          "embedding_model",
+          "embedding_dimensions",
+          "created_at",
+          "effective_at",
+          "last_confirmed_at",
+          "expires_at",
+          "superseded_by_id"
+        ],
+        "title": "MemoryRecord",
+        "type": "object"
+      },
+      "MemoryStatus": {
+        "enum": [
+          "active",
+          "disputed",
+          "superseded",
+          "forgotten"
+        ],
+        "title": "MemoryStatus",
+        "type": "string"
+      },
+      "MemoryType": {
+        "enum": [
+          "preference",
+          "semantic",
+          "episodic",
+          "procedural"
+        ],
+        "title": "MemoryType",
+        "type": "string"
+      },
+      "MemoryTypeCount": {
+        "additionalProperties": false,
+        "properties": {
+          "count": {
+            "minimum": 0.0,
+            "title": "Count",
+            "type": "integer"
+          },
+          "memory_type": {
+            "$ref": "#/components/schemas/MemoryType"
+          }
+        },
+        "required": [
+          "memory_type",
+          "count"
+        ],
+        "title": "MemoryTypeCount",
+        "type": "object"
+      },
+      "MemoryVersion": {
+        "additionalProperties": false,
+        "properties": {
+          "is_current": {
+            "default": false,
+            "title": "Is Current",
+            "type": "boolean"
+          },
+          "memory": {
+            "$ref": "#/components/schemas/MemoryRecord"
+          }
+        },
+        "required": [
+          "memory",
+          "is_current"
+        ],
+        "title": "MemoryVersion",
+        "type": "object"
+      },
+      "OverviewResponse": {
+        "additionalProperties": false,
+        "properties": {
+          "active_memories": {
+            "minimum": 0.0,
+            "title": "Active Memories",
+            "type": "integer"
+          },
+          "disputed_memories": {
+            "minimum": 0.0,
+            "title": "Disputed Memories",
+            "type": "integer"
+          },
+          "generated_at": {
+            "format": "date-time",
+            "title": "Generated At",
+            "type": "string"
+          },
+          "interactions_last_30_days": {
+            "minimum": 0.0,
+            "title": "Interactions Last 30 Days",
+            "type": "integer"
+          },
+          "recent_event_count": {
+            "minimum": 0.0,
+            "title": "Recent Event Count",
+            "type": "integer"
+          },
+          "recent_events": {
+            "items": {
+              "$ref": "#/components/schemas/MemoryEvent"
+            },
+            "title": "Recent Events",
+            "type": "array"
+          },
+          "reinforced_last_30_days": {
+            "minimum": 0.0,
+            "title": "Reinforced Last 30 Days",
+            "type": "integer"
+          },
+          "scope_id": {
+            "format": "uuid",
+            "title": "Scope Id",
+            "type": "string"
+          },
+          "type_counts": {
+            "items": {
+              "$ref": "#/components/schemas/MemoryTypeCount"
+            },
+            "title": "Type Counts",
+            "type": "array"
+          }
+        },
+        "required": [
+          "scope_id",
+          "active_memories",
+          "disputed_memories",
+          "reinforced_last_30_days",
+          "interactions_last_30_days",
+          "type_counts",
+          "recent_event_count",
+          "recent_events",
+          "generated_at"
+        ],
+        "title": "OverviewResponse",
+        "type": "object"
+      },
+      "PageInfo": {
+        "additionalProperties": false,
+        "properties": {
+          "next_cursor": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Next Cursor"
+          }
+        },
+        "required": [
+          "next_cursor"
+        ],
+        "title": "PageInfo",
+        "type": "object"
+      },
+      "RecallComparisonItem": {
+        "additionalProperties": false,
+        "properties": {
+          "memory": {
+            "$ref": "#/components/schemas/MemoryRecord"
+          },
+          "memoryos_rank": {
+            "anyOf": [
+              {
+                "minimum": 1.0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Memoryos Rank"
+          },
+          "memoryos_score": {
+            "$ref": "#/components/schemas/RecallScoreBreakdown"
+          },
+          "naive_rank": {
+            "anyOf": [
+              {
+                "minimum": 1.0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Naive Rank"
+          },
+          "naive_similarity": {
+            "maximum": 1.0,
+            "minimum": 0.0,
+            "title": "Naive Similarity",
+            "type": "number"
+          },
+          "rank_delta": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Rank Delta"
+          }
+        },
+        "required": [
+          "memory",
+          "naive_rank",
+          "memoryos_rank",
+          "naive_similarity",
+          "memoryos_score",
+          "rank_delta"
+        ],
+        "title": "RecallComparisonItem",
+        "type": "object"
+      },
+      "RecallComparisonResponse": {
+        "additionalProperties": false,
+        "properties": {
+          "candidate_count": {
+            "minimum": 0.0,
+            "title": "Candidate Count",
+            "type": "integer"
+          },
+          "evaluated_at": {
+            "format": "date-time",
+            "title": "Evaluated At",
+            "type": "string"
+          },
+          "memoryos": {
+            "items": {
+              "$ref": "#/components/schemas/RecallComparisonItem"
+            },
+            "title": "Memoryos",
+            "type": "array"
+          },
+          "naive": {
+            "items": {
+              "$ref": "#/components/schemas/RecallComparisonItem"
+            },
+            "title": "Naive",
+            "type": "array"
+          },
+          "policy_version": {
+            "title": "Policy Version",
+            "type": "string"
+          },
+          "query": {
+            "title": "Query",
+            "type": "string"
+          },
+          "scope_id": {
+            "format": "uuid",
+            "title": "Scope Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "scope_id",
+          "query",
+          "evaluated_at",
+          "policy_version",
+          "naive",
+          "memoryos",
+          "candidate_count"
+        ],
+        "title": "RecallComparisonResponse",
+        "type": "object"
+      },
+      "RecallItem": {
+        "additionalProperties": false,
+        "properties": {
+          "explanation": {
+            "title": "Explanation",
+            "type": "string"
+          },
+          "memory": {
+            "$ref": "#/components/schemas/MemoryRecord"
+          },
+          "rank": {
+            "minimum": 1.0,
+            "title": "Rank",
+            "type": "integer"
+          },
+          "score": {
+            "$ref": "#/components/schemas/RecallScoreBreakdown"
+          }
+        },
+        "required": [
+          "rank",
+          "memory",
+          "score",
+          "explanation"
+        ],
+        "title": "RecallItem",
+        "type": "object"
+      },
+      "RecallRequest": {
+        "additionalProperties": false,
+        "properties": {
+          "as_of": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "As Of"
+          },
+          "include_disputed": {
+            "default": false,
+            "title": "Include Disputed",
+            "type": "boolean"
+          },
+          "limit": {
+            "default": 5,
+            "maximum": 20.0,
+            "minimum": 1.0,
+            "title": "Limit",
+            "type": "integer"
+          },
+          "memory_types": {
+            "anyOf": [
+              {
+                "items": {
+                  "$ref": "#/components/schemas/MemoryType"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Memory Types"
+          },
+          "min_similarity": {
+            "default": 0.25,
+            "maximum": 1.0,
+            "minimum": 0.0,
+            "title": "Min Similarity",
+            "type": "number"
+          },
+          "mode": {
+            "$ref": "#/components/schemas/ExecutionMode",
+            "default": "demo"
+          },
+          "query": {
+            "maxLength": 2000,
+            "minLength": 1,
+            "title": "Query",
+            "type": "string"
+          },
+          "scope_id": {
+            "format": "uuid",
+            "title": "Scope Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "scope_id",
+          "query"
+        ],
+        "title": "RecallRequest",
+        "type": "object"
+      },
+      "RecallResponse": {
+        "additionalProperties": false,
+        "properties": {
+          "candidate_count": {
+            "minimum": 0.0,
+            "title": "Candidate Count",
+            "type": "integer"
+          },
+          "evaluated_at": {
+            "format": "date-time",
+            "title": "Evaluated At",
+            "type": "string"
+          },
+          "items": {
+            "items": {
+              "$ref": "#/components/schemas/RecallItem"
+            },
+            "title": "Items",
+            "type": "array"
+          },
+          "policy_version": {
+            "title": "Policy Version",
+            "type": "string"
+          },
+          "query": {
+            "title": "Query",
+            "type": "string"
+          },
+          "scope_id": {
+            "format": "uuid",
+            "title": "Scope Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "scope_id",
+          "query",
+          "evaluated_at",
+          "policy_version",
+          "candidate_count",
+          "items"
+        ],
+        "title": "RecallResponse",
+        "type": "object"
+      },
+      "RecallScoreBreakdown": {
+        "additionalProperties": false,
+        "properties": {
+          "confidence": {
+            "maximum": 1.0,
+            "minimum": 0.0,
+            "title": "Confidence",
+            "type": "number"
+          },
+          "days_since_confirmation": {
+            "minimum": 0.0,
+            "title": "Days Since Confirmation",
+            "type": "number"
+          },
+          "half_life_days": {
+            "minimum": 1.0,
+            "title": "Half Life Days",
+            "type": "integer"
+          },
+          "importance": {
+            "maximum": 1.0,
+            "minimum": 0.0,
+            "title": "Importance",
+            "type": "number"
+          },
+          "policy_version": {
+            "title": "Policy Version",
+            "type": "string"
+          },
+          "raw_similarity": {
+            "maximum": 1.0,
+            "minimum": -1.0,
+            "title": "Raw Similarity",
+            "type": "number"
+          },
+          "recency": {
+            "maximum": 1.0,
+            "minimum": 0.0,
+            "title": "Recency",
+            "type": "number"
+          },
+          "reinforcement": {
+            "maximum": 1.0,
+            "minimum": 0.0,
+            "title": "Reinforcement",
+            "type": "number"
+          },
+          "similarity": {
+            "maximum": 1.0,
+            "minimum": 0.0,
+            "title": "Similarity",
+            "type": "number"
+          },
+          "total": {
+            "maximum": 1.0,
+            "minimum": 0.0,
+            "title": "Total",
+            "type": "number"
+          },
+          "weighted_confidence": {
+            "maximum": 1.0,
+            "minimum": 0.0,
+            "title": "Weighted Confidence",
+            "type": "number"
+          },
+          "weighted_importance": {
+            "maximum": 1.0,
+            "minimum": 0.0,
+            "title": "Weighted Importance",
+            "type": "number"
+          },
+          "weighted_recency": {
+            "maximum": 1.0,
+            "minimum": 0.0,
+            "title": "Weighted Recency",
+            "type": "number"
+          },
+          "weighted_reinforcement": {
+            "maximum": 1.0,
+            "minimum": 0.0,
+            "title": "Weighted Reinforcement",
+            "type": "number"
+          },
+          "weighted_similarity": {
+            "maximum": 1.0,
+            "minimum": 0.0,
+            "title": "Weighted Similarity",
+            "type": "number"
+          }
+        },
+        "required": [
+          "policy_version",
+          "raw_similarity",
+          "similarity",
+          "importance",
+          "recency",
+          "reinforcement",
+          "confidence",
+          "weighted_similarity",
+          "weighted_importance",
+          "weighted_recency",
+          "weighted_reinforcement",
+          "weighted_confidence",
+          "total",
+          "days_since_confirmation",
+          "half_life_days"
+        ],
+        "title": "RecallScoreBreakdown",
+        "type": "object"
+      },
+      "ResolveMemoryRequest": {
+        "additionalProperties": false,
+        "properties": {
+          "reason": {
+            "default": "Resolved by owner",
+            "maxLength": 500,
+            "minLength": 1,
+            "title": "Reason",
+            "type": "string"
+          },
+          "selected_memory_id": {
+            "format": "uuid",
+            "title": "Selected Memory Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "selected_memory_id"
+        ],
+        "title": "ResolveMemoryRequest",
+        "type": "object"
+      },
+      "ResolveMemoryResponse": {
+        "additionalProperties": false,
+        "properties": {
+          "lineage_id": {
+            "format": "uuid",
+            "title": "Lineage Id",
+            "type": "string"
+          },
+          "reason": {
+            "title": "Reason",
+            "type": "string"
+          },
+          "resolved_memory_ids": {
+            "items": {
+              "format": "uuid",
+              "type": "string"
+            },
+            "title": "Resolved Memory Ids",
+            "type": "array"
+          },
+          "selected_memory_id": {
+            "format": "uuid",
+            "title": "Selected Memory Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "lineage_id",
+          "selected_memory_id",
+          "resolved_memory_ids",
+          "reason"
+        ],
+        "title": "ResolveMemoryResponse",
+        "type": "object"
+      },
+      "TraceStep": {
+        "additionalProperties": false,
+        "properties": {
+          "duration_ms": {
+            "minimum": 0.0,
+            "title": "Duration Ms",
+            "type": "number"
+          },
+          "node": {
+            "title": "Node",
+            "type": "string"
+          },
+          "status": {
+            "default": "completed",
+            "title": "Status",
+            "type": "string"
+          }
+        },
+        "required": [
+          "node",
+          "duration_ms",
+          "status"
+        ],
+        "title": "TraceStep",
+        "type": "object"
+      },
+      "ValidationError": {
+        "properties": {
+          "ctx": {
+            "title": "Context",
+            "type": "object"
+          },
+          "input": {
+            "title": "Input"
+          },
+          "loc": {
+            "items": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "integer"
+                }
+              ]
+            },
+            "title": "Location",
+            "type": "array"
+          },
+          "msg": {
+            "title": "Message",
+            "type": "string"
+          },
+          "type": {
+            "title": "Error Type",
+            "type": "string"
+          }
+        },
+        "required": [
+          "loc",
+          "msg",
+          "type"
+        ],
+        "title": "ValidationError",
+        "type": "object"
+      }
+    }
+  },
+  "info": {
+    "description": "Explainable long-term memory infrastructure for AI agents.",
+    "title": "MemoryOS API",
+    "version": "0.1.0"
+  },
+  "openapi": "3.1.0",
+  "paths": {
+    "/health/live": {
+      "get": {
+        "operationId": "live_health_health_live_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiHealth"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "Live Health",
+        "tags": [
+          "health"
+        ]
+      }
+    },
+    "/health/ready": {
+      "get": {
+        "operationId": "ready_health_health_ready_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiHealth"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "Ready Health",
+        "tags": [
+          "health"
+        ]
+      }
+    },
+    "/v1/demo/scenarios": {
+      "get": {
+        "operationId": "demo_scenarios_v1_demo_scenarios_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DemoCatalogResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "Demo Scenarios",
+        "tags": [
+          "v1"
+        ]
+      }
+    },
+    "/v1/interactions": {
+      "post": {
+        "operationId": "ingest_interaction_v1_interactions_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/IngestInteractionRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/IngestInteractionResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Ingest Interaction",
+        "tags": [
+          "v1"
+        ]
+      }
+    },
+    "/v1/interactions/{interaction_id}": {
+      "get": {
+        "operationId": "get_interaction_v1_interactions__interaction_id__get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "interaction_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Interaction Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "scope_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Scope Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/IngestInteractionResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Get Interaction",
+        "tags": [
+          "v1"
+        ]
+      }
+    },
+    "/v1/memories": {
+      "get": {
+        "operationId": "list_memories_v1_memories_get",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "scope_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Scope Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "cursor",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Cursor"
+            }
+          },
+          {
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "default": 25,
+              "maximum": 100,
+              "minimum": 1,
+              "title": "Limit",
+              "type": "integer"
+            }
+          },
+          {
+            "in": "query",
+            "name": "memory_types",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "items": {
+                    "$ref": "#/components/schemas/MemoryType"
+                  },
+                  "type": "array"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Memory Types"
+            }
+          },
+          {
+            "in": "query",
+            "name": "statuses",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "items": {
+                    "$ref": "#/components/schemas/MemoryStatus"
+                  },
+                  "type": "array"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Statuses"
+            }
+          },
+          {
+            "in": "query",
+            "name": "search",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Search"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MemoryListResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "List Memories",
+        "tags": [
+          "v1"
+        ]
+      }
+    },
+    "/v1/memories/{memory_id}": {
+      "get": {
+        "operationId": "get_memory_v1_memories__memory_id__get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "memory_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Memory Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "scope_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Scope Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MemoryRecord"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Get Memory",
+        "tags": [
+          "v1"
+        ]
+      }
+    },
+    "/v1/memories/{memory_id}/forget": {
+      "post": {
+        "operationId": "forget_memory_v1_memories__memory_id__forget_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "memory_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Memory Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "scope_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Scope Id",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ForgetMemoryRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ForgetMemoryResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Forget Memory",
+        "tags": [
+          "v1"
+        ]
+      }
+    },
+    "/v1/memories/{memory_id}/history": {
+      "get": {
+        "operationId": "memory_history_v1_memories__memory_id__history_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "memory_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Memory Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "scope_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Scope Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MemoryHistoryResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Memory History",
+        "tags": [
+          "v1"
+        ]
+      }
+    },
+    "/v1/memories/{memory_id}/resolve": {
+      "post": {
+        "operationId": "resolve_memory_v1_memories__memory_id__resolve_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "memory_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Memory Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "scope_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Scope Id",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ResolveMemoryRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ResolveMemoryResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Resolve Memory",
+        "tags": [
+          "v1"
+        ]
+      }
+    },
+    "/v1/overview": {
+      "get": {
+        "operationId": "overview_v1_overview_get",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "scope_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Scope Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OverviewResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Overview",
+        "tags": [
+          "v1"
+        ]
+      }
+    },
+    "/v1/recall": {
+      "post": {
+        "operationId": "recall_v1_recall_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RecallRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RecallResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Recall",
+        "tags": [
+          "v1"
+        ]
+      }
+    },
+    "/v1/recall/compare": {
+      "post": {
+        "operationId": "compare_recall_v1_recall_compare_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RecallRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RecallComparisonResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Compare Recall",
+        "tags": [
+          "v1"
+        ]
+      }
+    }
+  }
+}

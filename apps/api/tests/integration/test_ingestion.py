@@ -1,0 +1,228 @@
+"""End-to-end ingestion lifecycle against an isolated PostgreSQL scope."""
+
+from __future__ import annotations
+
+import os
+from datetime import UTC, datetime, timedelta
+from pathlib import Path
+from uuid import uuid4
+
+import pytest
+from alembic import command
+from alembic.config import Config
+from sqlalchemy import delete, text
+from sqlalchemy.exc import OperationalError
+
+from memoryos.config import Settings
+from memoryos.contracts.ingestion import IngestInteractionRequest
+from memoryos.db.models import Memory, Scope
+from memoryos.db.repositories import MemoryRepository
+from memoryos.db.session import create_db_engine, create_session_factory
+from memoryos.domain.enums import ExecutionMode, IngestDecisionType, MemoryStatus
+from memoryos.providers.errors import ProviderUnavailable
+from memoryos.seed.catalog import DEMO_MODEL, fixture_embeddings
+from memoryos.services.errors import ServiceError
+from memoryos.services.ingestion import MemoryIngestionService
+
+NOW = datetime(2026, 9, 1, 12, 0, tzinfo=UTC)
+
+
+def _settings() -> Settings:
+    return Settings(
+        database_url=os.environ.get("TEST_DATABASE_URL") or Settings().database_url,
+        demo_embedding_model=DEMO_MODEL,
+        demo_embedding_dimensions=1536,
+    )
+
+
+@pytest.fixture(scope="session")
+def database() -> Settings:
+    settings = _settings()
+    engine = create_db_engine(settings)
+    try:
+        with engine.connect() as connection:
+            connection.execute(text("SELECT 1"))
+    except (OperationalError, OSError) as exc:
+        engine.dispose()
+        if os.environ.get("TEST_DATABASE_URL"):
+            pytest.fail(f"TEST_DATABASE_URL is unavailable: {exc}")
+        pytest.skip(f"PostgreSQL integration database is unavailable: {exc}")
+    cfg = Config(str(Path(__file__).parents[2] / "alembic.ini"))
+    cfg.attributes["database_url"] = settings.database_url
+    command.upgrade(cfg, "head")
+    yield settings
+    engine.dispose()
+
+
+@pytest.fixture()
+def isolated_scope(database: Settings):
+    factory = create_session_factory(database)
+    scope_id = uuid4()
+    with factory.begin() as session:
+        MemoryRepository(session, database).create_scope(
+            scope_id=scope_id,
+            name="isolated-ingestion-test",
+            embedding_model=DEMO_MODEL,
+        )
+        repo = MemoryRepository(session, database)
+        vector = fixture_embeddings(["Atlas prefers concise answers with Python examples."])[0]
+        repo.insert_memory(
+            scope_id=scope_id,
+            content="Atlas prefers concise answers with Python examples.",
+            memory_type="preference",
+            subject="Atlas",
+            context_key="answer-style",
+            attribute_key="response-format",
+            importance=0.8,
+            confidence=0.8,
+            embedding=vector,
+            embedding_model=DEMO_MODEL,
+            effective_at=NOW - timedelta(days=2),
+            last_confirmed_at=NOW - timedelta(days=2),
+        )
+    try:
+        yield factory, scope_id
+    finally:
+        with factory.begin() as session:
+            session.execute(delete(Scope).where(Scope.id == scope_id))
+        factory.kw["bind"].dispose()
+
+
+def test_remember_reinforce_supersede_dispute_is_atomic_and_scoped(isolated_scope) -> None:
+    factory, scope_id = isolated_scope
+    service = MemoryIngestionService(_settings(), factory)
+
+    reinforce = service.ingest(
+        IngestInteractionRequest(
+            scope_id=scope_id,
+            text="As before, Atlas still prefers concise Python examples.",
+            occurred_at=NOW,
+            idempotency_key="lifecycle-reinforce",
+            mode=ExecutionMode.DEMO,
+        )
+    )
+    assert reinforce.decisions[0].decision_type is IngestDecisionType.REINFORCED
+    assert reinforce.decisions[0].confidence == pytest.approx(0.8095)
+
+    with factory() as session:
+        repo = MemoryRepository(session, _settings())
+        reinforced = repo.get_by_id(scope_id, reinforce.memory_ids[0])
+        assert reinforced is not None
+        assert reinforced.reinforcement_count == 1
+        assert reinforced.confidence == pytest.approx(0.8095)
+
+    superseded = service.ingest(
+        IngestInteractionRequest(
+            scope_id=scope_id,
+            text="From now on, Atlas wants short answers with one concrete example.",
+            occurred_at=NOW + timedelta(days=1),
+            idempotency_key="lifecycle-supersede",
+            mode=ExecutionMode.DEMO,
+        )
+    )
+    assert superseded.decisions[0].decision_type is IngestDecisionType.SUPERSEDED
+    assert len(superseded.memory_ids) == 2
+
+    disputed = service.ingest(
+        IngestInteractionRequest(
+            scope_id=scope_id,
+            text="Atlas might prefer a different response style.",
+            occurred_at=NOW + timedelta(days=2),
+            idempotency_key="lifecycle-dispute",
+            mode=ExecutionMode.DEMO,
+        )
+    )
+    assert disputed.decisions[0].decision_type is IngestDecisionType.DISPUTED
+    assert len(disputed.memory_ids) == 2
+    assert [step.node for step in disputed.trace.steps] == [
+        "extract",
+        "embed",
+        "find_related",
+        "assess_relations",
+        "validate_plan",
+        "persist",
+    ]
+
+    with factory() as session:
+        rows = list(
+            session.query(Memory)
+            .filter(
+                Memory.scope_id == scope_id,
+                Memory.context_key == "answer-style",
+                Memory.attribute_key == "response-format",
+            )
+            .all()
+        )
+        assert sum(row.status is MemoryStatus.ACTIVE for row in rows) == 0
+        assert sum(row.status is MemoryStatus.DISPUTED for row in rows) == 2
+
+
+def test_replay_and_preview_do_not_write_again(isolated_scope) -> None:
+    factory, scope_id = isolated_scope
+    service = MemoryIngestionService(_settings(), factory)
+    request = IngestInteractionRequest(
+        scope_id=scope_id,
+        text="To start Atlas locally, run uv run uvicorn memoryos.main:app --reload.",
+        idempotency_key="replay-request",
+        mode=ExecutionMode.DEMO,
+    )
+    first = service.ingest(request)
+    with factory() as session:
+        before = MemoryRepository(session, _settings()).require_scope(scope_id).revision
+    replay = service.ingest(request)
+    with factory() as session:
+        after = MemoryRepository(session, _settings()).require_scope(scope_id).revision
+    assert replay.interaction_id == first.interaction_id
+    assert replay.memory_ids == first.memory_ids
+    assert replay == first
+    assert before == after
+
+    preview = service.ingest(
+        IngestInteractionRequest(
+            scope_id=scope_id,
+            text="Thanks for the update!",
+            mode=ExecutionMode.DEMO,
+            preview=True,
+        )
+    )
+    with factory() as session:
+        final = MemoryRepository(session, _settings()).require_scope(scope_id).revision
+    assert preview.status.value == "preview"
+    assert preview.decisions[0].decision_type is IngestDecisionType.SKIPPED
+    assert final == after
+
+
+def test_provider_failure_leaves_scope_and_interactions_unchanged(isolated_scope) -> None:
+    factory, scope_id = isolated_scope
+
+    def failing_embedding(mode, settings):
+        raise ProviderUnavailable("fixture failure")
+
+    service = MemoryIngestionService(
+        _settings(),
+        factory,
+        embedding_factory=failing_embedding,
+    )
+    with factory() as session:
+        before = MemoryRepository(session, _settings()).require_scope(scope_id).revision
+    with pytest.raises(ServiceError) as error:
+        service.ingest(
+            IngestInteractionRequest(
+                scope_id=scope_id,
+                text="To start Atlas locally, run uv run uvicorn memoryos.main:app --reload.",
+                idempotency_key="provider-failure",
+                mode=ExecutionMode.DEMO,
+            )
+        )
+    with factory() as session:
+        repo = MemoryRepository(session, _settings())
+        after = repo.require_scope(scope_id).revision
+        assert (
+            repo.get_interaction_by_idempotency(
+                scope_id=scope_id,
+                idempotency_key="provider-failure",
+            )
+            is None
+        )
+    assert error.value.code == "provider_unavailable"
+    assert after == before
