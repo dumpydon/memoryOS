@@ -127,7 +127,7 @@ export default function SettingsPage() {
               type="button"
               onClick={saveToken}
             >
-              Save in memory
+              Use for this session
             </button>
           </div>
           <div className="token-status">

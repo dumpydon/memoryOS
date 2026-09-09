@@ -14,6 +14,7 @@ import Link from "next/link";
 import { usePathname } from "next/navigation";
 
 import { useWorkspace } from "@/components/workspace-context";
+import { AppearanceControl } from "@/components/appearance-control";
 
 const navigation = [
   { href: "/", label: "Overview", icon: LayoutDashboard },
@@ -68,6 +69,7 @@ export function SidebarNav() {
       </nav>
 
       <div className="sidebar-bottom">
+        <AppearanceControl />
         <div className="service-status">
           <span className="status-dot" />
           <span>{mode === "demo" ? "Demo fixture mode" : "Live provider mode"}</span>
