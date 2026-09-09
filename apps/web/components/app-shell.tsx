@@ -4,6 +4,7 @@ import { DotMatrixWordmark } from "@/components/dot-matrix-wordmark";
 import { ThemeProvider } from "@/components/theme-provider";
 import { WorkspaceProvider } from "@/components/workspace-context";
 import { WorkspaceMain } from "@/components/workspace-main";
+import Link from "next/link";
 
 export function AppShell({ children }: { children: React.ReactNode }) {
   return (
@@ -13,6 +14,36 @@ export function AppShell({ children }: { children: React.ReactNode }) {
           <div className="memoryos-shell">
             <div className="footer-curtain-stage">
               <DotMatrixWordmark />
+              <div className="curtain-footer">
+                <span>
+                  © 2026 MemoryOS, made with{" "}
+                  <span
+                    className="curtain-lizard"
+                    role="img"
+                    aria-label="lizard"
+                  >
+                    🦎
+                  </span>{" "}
+                  in India
+                </span>
+                <nav className="curtain-footer-links" aria-label="Legal">
+                  <Link
+                    href="/legal#terms-of-use"
+                    title="Built by Dumpydon"
+                    aria-label="Terms of use — Built by Dumpydon"
+                  >
+                    Terms of use
+                  </Link>
+                  <span aria-hidden="true">|</span>
+                  <Link
+                    href="/legal#privacy-policy"
+                    title="Built by Dumpydon"
+                    aria-label="Privacy policy — Built by Dumpydon"
+                  >
+                    Privacy policy
+                  </Link>
+                </nav>
+              </div>
             </div>
             <div className="footer-curtain-content">
               <div className="app-frame">

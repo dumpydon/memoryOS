@@ -35,12 +35,12 @@ export function createDotCloud(
   const context = mask.getContext("2d", { willReadFrequently: true });
   if (!context) throw new Error("Canvas 2D context is unavailable");
 
-  const maxWidth = width * 0.88;
-  let fontSize = Math.min(height * 0.58, 190);
-  context.font = `650 ${fontSize}px ${fontFamily()}`;
+  const maxWidth = width * 0.92;
+  let fontSize = height * 0.6;
+  context.font = `640 ${fontSize}px ${fontFamily()}`;
   let metrics = context.measureText(label);
   if (metrics.width > maxWidth) fontSize *= maxWidth / metrics.width;
-  context.font = `650 ${fontSize}px ${fontFamily()}`;
+  context.font = `640 ${fontSize}px ${fontFamily()}`;
   metrics = context.measureText(label);
   context.textAlign = "left";
   context.textBaseline = "middle";

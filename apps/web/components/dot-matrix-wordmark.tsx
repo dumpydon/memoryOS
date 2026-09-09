@@ -9,13 +9,15 @@ import {
 } from "@/components/dot-matrix/glyph-mask";
 
 const LABEL = "MemoryOS";
-const IDLE = "rgba(163, 149, 242, .11)";
+const IDLE = "rgba(163, 149, 242, .08)";
 const PRIMARY = "#a395f2";
 const SECONDARY = "#7465d5";
-const ACTIVE_THRESHOLD = 0.25;
-const NOISE_SCALE = 0.024;
-const NOISE_BLEND = 0.72;
-const TRAVEL_SPEED = 0.42;
+// Keep the reference field cadence: a broad simplex field blended with a
+// stable per-cell hash produces the long, coherent sweeps through the glyph.
+const ACTIVE_THRESHOLD = 0.24;
+const NOISE_SCALE = 0.002;
+const NOISE_BLEND = 0.7;
+const TRAVEL_SPEED = 0.5;
 
 function drawFrame(
   context: CanvasRenderingContext2D,
@@ -43,7 +45,7 @@ function drawFrame(
     const threshold =
       cloud.staticNoise[index] * (1 - NOISE_BLEND) + noise * NOISE_BLEND;
     if (threshold >= ACTIVE_THRESHOLD) continue;
-    const nextColor = cloud.colorNoise[index] < 0.5 ? SECONDARY : PRIMARY;
+    const nextColor = cloud.colorNoise[index] < 0.34 ? SECONDARY : PRIMARY;
     if (nextColor !== activeColor) {
       context.fillStyle = nextColor;
       activeColor = nextColor;
