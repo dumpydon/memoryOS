@@ -21,7 +21,7 @@ First time, from the repository root:
 
 ```bash
 cp .env.example .env
-pnpm setup
+pnpm run setup
 ```
 
 For normal daily development:
@@ -42,7 +42,7 @@ stop PostgreSQL without deleting its volume, run:
 pnpm dev:stop
 ```
 
-`pnpm setup` installs the web and API dependencies, starts PostgreSQL, applies migrations, and seeds
+`pnpm run setup` installs the web and API dependencies, starts PostgreSQL, applies migrations, and seeds
 the idempotent demo fixtures. It is intended for first-time setup or after dependency changes; the
 daily `pnpm dev` command does not reinstall dependencies or reseed data.
 

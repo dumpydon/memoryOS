@@ -8,7 +8,7 @@ From the repository root, run the first-time setup once:
 
 ```bash
 cp .env.example .env
-pnpm setup
+pnpm run setup
 ```
 
 Then start the daily development environment from one terminal:
