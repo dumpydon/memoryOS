@@ -4,26 +4,20 @@ The public demo is designed to be useful without an OpenAI key. It uses authored
 
 ## Prepare the local demo
 
-From the repository root:
+From the repository root, run the first-time setup once:
 
 ```bash
 cp .env.example .env
-docker compose up -d postgres
-cd apps/api
-uv sync --extra dev
-uv run alembic upgrade head
-uv run memoryos-seed
-uv run uvicorn memoryos.main:app --reload --host 0.0.0.0 --port 8000
+pnpm setup
 ```
 
-In a second terminal:
+Then start the daily development environment from one terminal:
 
 ```bash
-pnpm install
-pnpm --dir apps/web dev
+pnpm dev
 ```
 
-Open `http://localhost:3000`. If the API is waking or not started, the dashboard shows an actionable API state instead of fake metrics.
+Open `http://127.0.0.1:3000`. If the API is waking or not started, the dashboard shows an actionable API state instead of fake metrics. See the README's advanced section for manual per-service startup when debugging.
 
 ## Suggested walkthrough
 

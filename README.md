@@ -17,39 +17,66 @@ It is a portfolio-sized engineering system, not a chatbot. The Next.js dashboard
 
 Requirements: Python 3.12, uv, Node 22, pnpm 11.19, and Docker with a PostgreSQL/pgvector image.
 
+First time, from the repository root:
+
 ```bash
 cp .env.example .env
-docker compose up -d postgres
-cd apps/api
-uv sync --extra dev
-uv run alembic upgrade head
-uv run memoryos-seed
-uv run uvicorn memoryos.main:app --reload --host 0.0.0.0 --port 8000
+pnpm setup
 ```
 
-In a second terminal:
+For normal daily development:
 
 ```bash
-pnpm install
-pnpm --dir apps/web dev
+pnpm dev
 ```
 
-Open [http://localhost:3000](http://localhost:3000). Demo mode uses authored deterministic fixture providers and requires no OpenAI key. Copy `apps/web/.env.example` only when the API runs at a non-default origin.
+This starts the existing PostgreSQL/pgvector service, applies pending migrations, and runs FastAPI
+and Next.js together with `[db]`, `[api]`, and `[web]` log prefixes. Open
+[http://127.0.0.1:3000](http://127.0.0.1:3000). Demo mode uses authored deterministic fixture providers
+and requires no OpenAI key. Copy `apps/web/.env.example` only when the API runs at a non-default origin.
+
+Press `Ctrl-C` to stop the API and web processes; PostgreSQL stays running for faster restarts. To
+stop PostgreSQL without deleting its volume, run:
+
+```bash
+pnpm dev:stop
+```
+
+`pnpm setup` installs the web and API dependencies, starts PostgreSQL, applies migrations, and seeds
+the idempotent demo fixtures. It is intended for first-time setup or after dependency changes; the
+daily `pnpm dev` command does not reinstall dependencies or reseed data.
+
+### Advanced / manual startup
+
+For debugging each service separately, use the underlying commands:
+
+```bash
+docker compose up -d postgres
+cd apps/api
+uv run --no-sync alembic upgrade head
+uv run --no-sync uvicorn memoryos.main:app --reload --host 0.0.0.0 --port 8000
+```
+
+In another terminal:
+
+```bash
+pnpm --dir apps/web dev
+```
 
 ## API and MCP
 
 The REST API is versioned under `/v1`:
 
-| Surface | Purpose |
-|---|---|
-| `POST /v1/interactions` | Preview or commit one interaction |
-| `GET /v1/memories` | Explore scoped memories |
-| `GET /v1/memories/{id}/history` | Read immutable versions/events |
-| `POST /v1/recall` | Explainable MemoryOS retrieval |
-| `POST /v1/recall/compare` | Same-snapshot naive vs MemoryOS ranking |
+| Surface                         | Purpose                                        |
+| ------------------------------- | ---------------------------------------------- |
+| `POST /v1/interactions`         | Preview or commit one interaction              |
+| `GET /v1/memories`              | Explore scoped memories                        |
+| `GET /v1/memories/{id}/history` | Read immutable versions/events                 |
+| `POST /v1/recall`               | Explainable MemoryOS retrieval                 |
+| `POST /v1/recall/compare`       | Same-snapshot naive vs MemoryOS ranking        |
 | `POST /v1/memories/{id}/forget` | Soft-forget a lineage while preserving history |
-| `GET /v1/overview` | Dashboard metrics and recent events |
-| `GET /v1/demo/scenarios` | Finite public fixture catalog |
+| `GET /v1/overview`              | Dashboard metrics and recent events            |
+| `GET /v1/demo/scenarios`        | Finite public fixture catalog                  |
 
 Run the local MCP stdio server from `apps/api`:
 
