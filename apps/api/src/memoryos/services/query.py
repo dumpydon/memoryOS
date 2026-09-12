@@ -41,7 +41,7 @@ from memoryos.db.errors import (
     ScopeNotFoundError,
     ScopeRevisionConflict,
 )
-from memoryos.db.models import Interaction, Memory
+from memoryos.db.models import Interaction, Memory, MemoryReview
 from memoryos.db.models import MemoryEvent as MemoryEventRow
 from memoryos.db.repositories import MemoryRepository, RecallCandidate
 from memoryos.domain.enums import (
@@ -51,6 +51,12 @@ from memoryos.domain.enums import (
     MemoryType,
 )
 from memoryos.domain.policies import MEMORYOS_POLICY_VERSION, rank_recall_candidates, require_utc
+from memoryos.providers.errors import (
+    ProviderOutputInvalid,
+    ProviderTimeout,
+    ProviderUnavailable,
+    UnsupportedDemoInput,
+)
 from memoryos.services.errors import ServiceError
 
 DEMO_SCOPE_ID = UUID("00000000-0000-0000-0000-000000000001")
@@ -168,15 +174,21 @@ class MemoryQueryService:
         return model, dimensions, embed
 
     def _embed_query(self, *, query: str, mode: ExecutionMode) -> tuple[list[float], str, int]:
-        model, dimensions, embed = self._provider(mode)
         try:
+            model, dimensions, embed = self._provider(mode)
             vectors = embed([query])
+        except UnsupportedDemoInput as exc:
+            raise ServiceError(
+                "unsupported_demo_input",
+                "The demo query is not in the finite fixture catalog.",
+            ) from exc
+        except ProviderTimeout as exc:
+            raise ServiceError("provider_timeout", str(exc), retryable=True) from exc
+        except ProviderOutputInvalid as exc:
+            raise ServiceError("provider_output_invalid", str(exc)) from exc
+        except ProviderUnavailable as exc:
+            raise ServiceError("provider_unavailable", str(exc), retryable=True) from exc
         except ValueError as exc:
-            if mode is ExecutionMode.DEMO:
-                raise ServiceError(
-                    "unsupported_demo_input",
-                    "The demo query is not in the finite fixture catalog.",
-                ) from exc
             raise ServiceError(
                 "provider_output_invalid",
                 "Embedding provider returned an invalid query input.",
@@ -380,6 +392,7 @@ class MemoryQueryService:
                 naive_similarity=max(0.0, candidate.raw_similarity or 0.0),
                 memoryos_score=scored_memory.score,
                 rank_delta=delta,
+                explanation=scored_memory.explanation,
             )
 
         naive_ids = [candidate.record.id for candidate in naive[: request.limit]]
@@ -653,6 +666,17 @@ class MemoryQueryService:
                     )
                     or 0
                 )
+                unresolved_review_count = (
+                    session.scalar(
+                        select(func.count())
+                        .select_from(MemoryReview)
+                        .where(
+                            MemoryReview.scope_id == scope_id,
+                            MemoryReview.status == "pending",
+                        )
+                    )
+                    or 0
+                )
                 return OverviewResponse(
                     scope_id=scope_id,
                     active_memories=int(active_count),
@@ -668,6 +692,7 @@ class MemoryQueryService:
                         _event_contract(row[0], memory_content=row[1]) for row in recent_rows
                     ],
                     generated_at=now,
+                    unresolved_review_count=int(unresolved_review_count),
                 )
         except Exception as exc:
             raise _error_from_db(exc) from exc

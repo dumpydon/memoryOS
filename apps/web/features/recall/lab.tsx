@@ -5,6 +5,7 @@ import {
   ArrowRight,
   ChevronDown,
   FlaskConical,
+  GitBranch,
   Info,
   Search,
   ShieldAlert,
@@ -20,7 +21,11 @@ import {
 } from "@/components/status-state";
 import { TypeBadge } from "@/components/type-badge";
 import { useWorkspace } from "@/components/workspace-context";
-import { getDemoCatalog, postRecallCompare } from "@/lib/api/queries";
+import {
+  getCapabilities,
+  getDemoCatalog,
+  postRecallCompare,
+} from "@/lib/api/queries";
 import type {
   RecallComparisonItem,
   RecallComparisonResponse,
@@ -34,6 +39,10 @@ export function RecallLab() {
     queryKey: ["demo-catalog", "recall"],
     queryFn: () => getDemoCatalog(token),
   });
+  const capabilities = useQuery({
+    queryKey: ["capabilities"],
+    queryFn: () => getCapabilities(token),
+  });
   const activeQuery = searchParams.get("q") || "";
   const [draftQuery, setDraftQuery] = useState(activeQuery);
   const knownQuery = useMemo(
@@ -42,8 +51,14 @@ export function RecallLab() {
   );
   const allowedQuery =
     mode === "live"
-      ? isOwner && Boolean(activeQuery.trim())
+      ? isOwner &&
+        Boolean(activeQuery.trim()) &&
+        capabilities.data?.live_recall_available === true
       : Boolean(knownQuery);
+  const liveUnavailable =
+    mode === "live" &&
+    capabilities.data &&
+    !capabilities.data.live_recall_available;
   const comparison = useQuery({
     queryKey: ["recall-compare", scopeId, mode, activeQuery],
     queryFn: () =>
@@ -84,6 +99,15 @@ export function RecallLab() {
           </span>
         </div>
       </header>
+
+      {liveUnavailable ? (
+        <InlineNotice tone="warning">
+          <ShieldAlert size={15} />
+          Live recall is unavailable because the API server has no OpenAI key
+          configured. Add <code>OPENAI_API_KEY</code> to the API environment,
+          then refresh this page. Demo queries remain available.
+        </InlineNotice>
+      ) : null}
 
       <section className="panel recall-query-panel">
         <div className="query-heading">
@@ -147,6 +171,16 @@ export function RecallLab() {
           running arbitrary queries.
         </InlineNotice>
       ) : null}
+      {mode === "live" && isOwner && liveUnavailable && activeQuery ? (
+        <InlineNotice tone="info">
+          <Info size={15} />
+          Your query is ready, but MemoryOS will not send it to a provider until
+          the API reports live recall as configured.
+        </InlineNotice>
+      ) : null}
+      {mode === "live" && isOwner && !capabilities.data && capabilities.isPending ? (
+        <LoadingState label="Checking live provider readiness" />
+      ) : null}
       {allowedQuery && comparison.isPending ? (
         <LoadingState label="Scoring the same memory snapshot" />
       ) : null}
@@ -198,6 +232,7 @@ function ComparisonResults({ data }: { data: RecallComparisonResponse }) {
           kind="memoryos"
         />
       </div>
+      <RankChangeSummary data={data} />
       <div className="lab-note">
         <Info size={14} />
         <span>
@@ -205,6 +240,29 @@ function ComparisonResults({ data }: { data: RecallComparisonResponse }) {
           relevance floor, and evaluation time. MemoryOS receives no extra
           candidates.
         </span>
+      </div>
+    </div>
+  );
+}
+
+function RankChangeSummary({ data }: { data: RecallComparisonResponse }) {
+  const moved = data.memoryos
+    .filter((item) => item.rank_delta !== null && item.rank_delta !== 0)
+    .sort((left, right) => Math.abs(right.rank_delta || 0) - Math.abs(left.rank_delta || 0));
+  const lead = moved[0];
+  return (
+    <div className="rank-change-summary">
+      <div className="rank-change-summary-icon">
+        <GitBranch size={15} aria-hidden="true" />
+      </div>
+      <div>
+        <strong>Why ranks move</strong>
+        <p>
+          {lead
+            ? lead.explanation ||
+              `${lead.memory.content} moved ${formatMovement(lead.rank_delta)} because MemoryOS combines similarity with importance, recency, reinforcement, and confidence.`
+            : "MemoryOS applies the same score components to every eligible memory, so rank changes are inspectable."}
+        </p>
       </div>
     </div>
   );
@@ -267,6 +325,12 @@ function RankCard({
               : item.memoryos_score.total.toFixed(3)}{" "}
             · {item.memory.reinforcement_count} reinforcements
           </small>
+          <small className="rank-card-explanation">
+            {item.explanation ||
+              (kind === "naive"
+                ? "Baseline uses semantic similarity only."
+                : "MemoryOS blends similarity with importance, recency, reinforcement, and confidence.")}
+          </small>
         </div>
         <span className={`rank-movement ${movementTone(item.rank_delta)}`}>
           {formatMovement(item.rank_delta)}
@@ -301,10 +365,8 @@ function RankCard({
               contribution={item.memoryos_score.weighted_confidence}
             />
             <p className="rank-explanation">
-              {item.memoryos_score.total.toFixed(3)} total score ·{" "}
-              {item.memoryos_score.days_since_confirmation.toFixed(0)} days
-              since confirmation · {item.memoryos_score.half_life_days}d
-              half-life
+              {item.explanation ||
+                `${item.memoryos_score.total.toFixed(3)} total score · ${item.memoryos_score.days_since_confirmation.toFixed(0)} days since confirmation · ${item.memoryos_score.half_life_days}d half-life`}
             </p>
           </>
         ) : (

@@ -1,13 +1,17 @@
 import { apiFetch } from "./client";
 import type {
-  DemoCatalogResponse,
+  CapabilitiesResponse,
   ExecutionMode,
+  DemoCatalogResponse,
   IngestInteractionResponse,
   MemoryHistoryResponse,
   MemoryListResponse,
   MemoryRecord,
   OverviewResponse,
   RecallComparisonResponse,
+  ReviewAction,
+  ReviewItem,
+  ReviewListResponse,
 } from "./types";
 
 export type MemoryListQuery = {
@@ -32,6 +36,10 @@ export function getOverview(scopeId: string, token?: string | null) {
     `/v1/overview?scope_id=${encodeURIComponent(scopeId)}`,
     { token },
   );
+}
+
+export function getCapabilities(token?: string | null) {
+  return apiFetch<CapabilitiesResponse>("/v1/capabilities", { token });
 }
 
 export function getDemoCatalog(token?: string | null) {
@@ -102,6 +110,54 @@ export function postRecallCompare(
   token?: string | null,
 ) {
   return apiFetch<RecallComparisonResponse>("/v1/recall/compare", {
+    method: "POST",
+    body: JSON.stringify(input),
+    token,
+  });
+}
+
+export function getReviews(
+  scopeId: string,
+  status: "pending" | "resolved" = "pending",
+  limit = 50,
+  token?: string | null,
+) {
+  const params = new URLSearchParams({
+    scope_id: scopeId,
+    status,
+    limit: String(limit),
+  });
+  return apiFetch<ReviewListResponse>(`/v1/reviews?${params.toString()}`, {
+    token,
+  });
+}
+
+export function resolveReview(
+  scopeId: string,
+  reviewId: string,
+  action: ReviewAction,
+  reason: string,
+  token: string,
+) {
+  return apiFetch<ReviewItem>(
+    `/v1/reviews/${encodeURIComponent(reviewId)}/resolve?scope_id=${encodeURIComponent(scopeId)}`,
+    {
+      method: "POST",
+      body: JSON.stringify({ action, reason }),
+      token,
+    },
+  );
+}
+
+export function proposeConsolidation(
+  input: {
+    scope_id: string;
+    source_memory_ids: string[];
+    mode: ExecutionMode;
+  },
+  token: string,
+) {
+  return apiFetch<ReviewItem>("/v1/consolidations/propose", {
     method: "POST",
     body: JSON.stringify(input),
     token,

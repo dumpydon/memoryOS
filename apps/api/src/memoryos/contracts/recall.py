@@ -62,6 +62,7 @@ class RecallComparisonItem(ContractModel):
     naive_similarity: float = Field(ge=0, le=1)
     memoryos_score: RecallScoreBreakdown
     rank_delta: int | None = None
+    explanation: str = ""
 
 
 class RecallComparisonResponse(ContractModel):

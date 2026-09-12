@@ -146,6 +146,7 @@ class DemoStructuredProvider:
         *,
         candidates: Sequence[CandidateMemory],
         related_memories: Sequence[MemoryRecord],
+        source_text: str | None = None,
     ) -> list[RelationAssessment]:
         if len(candidates) > MAX_CANDIDATES or len(related_memories) > MAX_RELATED_MEMORIES:
             raise ProviderOutputInvalid("demo relation input exceeds the provider bound")

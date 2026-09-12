@@ -1,7 +1,15 @@
 import type { Metadata } from "next";
+import localFont from "next/font/local";
 
 import { AppShell } from "@/components/app-shell";
 import "./globals.css";
+
+const geistMono = localFont({
+  src: "../node_modules/next/dist/next-devtools/server/font/geist-mono-latin.woff2",
+  variable: "--font-wordmark",
+  display: "swap",
+  preload: true,
+});
 
 export const metadata: Metadata = {
   title: "MemoryOS — agent memory layer",
@@ -12,7 +20,7 @@ export default function RootLayout({
   children,
 }: Readonly<{ children: React.ReactNode }>) {
   return (
-    <html lang="en" suppressHydrationWarning>
+    <html lang="en" className={geistMono.variable} suppressHydrationWarning>
       <head>
         <script
           id="memoryos-theme-init"

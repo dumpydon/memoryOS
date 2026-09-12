@@ -8,6 +8,7 @@ interaction, memory versions, events, and final decision payload atomically.
 from __future__ import annotations
 
 import hashlib
+import inspect
 import json
 import math
 import uuid
@@ -376,6 +377,11 @@ class MemoryIngestionService:
             for vector in vectors:
                 if not isinstance(vector, list) or len(vector) != dimensions:
                     raise ProviderOutputInvalid("provider returned invalid embedding dimensions")
+                if any(
+                    isinstance(value, bool) or not isinstance(value, (int, float))
+                    for value in vector
+                ):
+                    raise ProviderOutputInvalid("provider returned invalid embedding values")
                 values = [float(value) for value in vector]
                 if not all(math.isfinite(value) for value in values) or not any(values):
                     raise ProviderOutputInvalid("provider returned an invalid embedding vector")
@@ -427,13 +433,31 @@ class MemoryIngestionService:
             for candidate in candidates:
                 for record in related_map.get(candidate.candidate_id, []):
                     unique[record.id] = record
+            related_snapshot = list(unique.values())[
+                : MAX_CANDIDATES * MAX_RELATED_MEMORIES_PER_CANDIDATE
+            ]
             try:
-                relations = structured_provider.assess_relations(
-                    candidates=candidates,
-                    related_memories=list(unique.values())[
-                        : MAX_CANDIDATES * MAX_RELATED_MEMORIES_PER_CANDIDATE
-                    ],
-                )
+                # ``source_text`` gives the live model the complete evidence
+                # boundary needed to distinguish a correction from a paraphrase.
+                # Keep compatibility with older injected providers that implement
+                # the original two-keyword protocol.
+                relation_method = structured_provider.assess_relations
+                try:
+                    parameters = inspect.signature(relation_method).parameters
+                except (TypeError, ValueError):
+                    accepts_source = False
+                else:
+                    accepts_source = "source_text" in parameters or any(
+                        parameter.kind is inspect.Parameter.VAR_KEYWORD
+                        for parameter in parameters.values()
+                    )
+                relation_kwargs: dict[str, Any] = {
+                    "candidates": candidates,
+                    "related_memories": related_snapshot,
+                }
+                if accepts_source:
+                    relation_kwargs["source_text"] = request.text
+                relations = relation_method(**relation_kwargs)
             except Exception as exc:
                 raise _provider_error(exc) from exc
             if not isinstance(relations, list) or len(relations) != len(candidates):

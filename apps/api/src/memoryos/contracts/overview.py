@@ -25,3 +25,4 @@ class OverviewResponse(ContractModel):
     recent_event_count: int = Field(ge=0)
     recent_events: list[MemoryEvent] = Field(default_factory=list)
     generated_at: datetime
+    unresolved_review_count: int = Field(default=0, ge=0)

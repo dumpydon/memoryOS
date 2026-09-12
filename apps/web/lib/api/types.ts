@@ -3,6 +3,7 @@ import type { components } from "@/lib/generated/api";
 
 export type MemoryType = components["schemas"]["MemoryType"];
 export type MemoryStatus = components["schemas"]["MemoryStatus"];
+export type MemoryRelation = components["schemas"]["MemoryRelation"];
 export type ExecutionMode = components["schemas"]["ExecutionMode"];
 export type InteractionStatus = components["schemas"]["InteractionStatus"];
 export type IngestDecisionType = components["schemas"]["IngestDecisionType"];
@@ -35,3 +36,9 @@ export type ForgetMemoryResponse =
   components["schemas"]["ForgetMemoryResponse"];
 export type ResolveMemoryResponse =
   components["schemas"]["ResolveMemoryResponse"];
+export type CapabilitiesResponse =
+  components["schemas"]["CapabilitiesResponse"];
+export type ReviewAction = components["schemas"]["ResolveReviewRequest"]["action"];
+export type ReviewStatus = "pending" | "resolved";
+export type ReviewItem = components["schemas"]["ReviewItem"];
+export type ReviewListResponse = components["schemas"]["ReviewListResponse"];

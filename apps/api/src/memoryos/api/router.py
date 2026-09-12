@@ -8,6 +8,7 @@ from uuid import UUID
 from fastapi import APIRouter, Query, Request
 
 from memoryos.api.auth import AccessContext, authorize_request
+from memoryos.contracts.capabilities import CapabilitiesResponse
 from memoryos.contracts.demo import DemoCatalogResponse
 from memoryos.contracts.ingestion import IngestInteractionRequest, IngestInteractionResponse
 from memoryos.contracts.memory import (
@@ -21,6 +22,13 @@ from memoryos.contracts.memory import (
 )
 from memoryos.contracts.overview import OverviewResponse
 from memoryos.contracts.recall import RecallComparisonResponse, RecallRequest, RecallResponse
+from memoryos.contracts.review import (
+    ConsolidationRequest,
+    ResolveReviewRequest,
+    ReviewItem,
+    ReviewListResponse,
+    ReviewStatus,
+)
 from memoryos.domain.enums import ExecutionMode, MemoryStatus, MemoryType
 from memoryos.seed.catalog import get_catalog, is_allowed_demo_query, is_allowed_demo_scenario
 from memoryos.services.errors import ServiceError
@@ -28,6 +36,21 @@ from memoryos.services.protocols import IngestionService
 from memoryos.services.runtime import AppRuntime
 
 router = APIRouter(prefix="/v1", tags=["v1"])
+
+
+@router.get("/capabilities", response_model=CapabilitiesResponse)
+def capabilities(request: Request) -> CapabilitiesResponse:
+    settings = _runtime(request).settings
+    available = bool(settings.openai_api_key and settings.openai_api_key.strip())
+    return CapabilitiesResponse(
+        live_ingestion_available=available,
+        live_recall_available=available,
+        reason=(
+            None if available else "Configure OPENAI_API_KEY on the API server to use live mode."
+        ),
+        structured_model=settings.openai_model,
+        embedding_model=settings.embedding_model,
+    )
 
 
 def _runtime(request: Request) -> AppRuntime:
@@ -212,6 +235,46 @@ def overview(scope_id: UUID, request: Request) -> OverviewResponse:
 @router.get("/demo/scenarios", response_model=DemoCatalogResponse)
 def demo_scenarios() -> DemoCatalogResponse:
     return get_catalog()
+
+
+@router.get("/reviews", response_model=ReviewListResponse)
+def list_reviews(
+    request: Request,
+    scope_id: UUID,
+    status: ReviewStatus = "pending",
+    limit: Annotated[int, Query(ge=1, le=100)] = 50,
+) -> ReviewListResponse:
+    from memoryos.services.review import MemoryReviewService
+
+    runtime = _runtime(request)
+    _authorize_scope(request, runtime, scope_id=scope_id)
+    return MemoryReviewService(runtime.settings, runtime.session_factory).list_reviews(
+        scope_id=scope_id, status=status, limit=limit
+    )
+
+
+@router.post("/reviews/{review_id}/resolve", response_model=ReviewItem)
+def resolve_review(
+    review_id: UUID, payload: ResolveReviewRequest, scope_id: UUID, request: Request
+) -> ReviewItem:
+    from memoryos.services.review import MemoryReviewService
+
+    runtime = _runtime(request)
+    _authorize_scope(request, runtime, scope_id=scope_id, mutation=True)
+    return MemoryReviewService(runtime.settings, runtime.session_factory).resolve(
+        scope_id=scope_id, review_id=review_id, request=payload
+    )
+
+
+@router.post("/consolidations/propose", response_model=ReviewItem)
+def propose_consolidation(payload: ConsolidationRequest, request: Request) -> ReviewItem:
+    from memoryos.services.consolidation import MemoryConsolidationService
+
+    runtime = _runtime(request)
+    _authorize_scope(
+        request, runtime, scope_id=payload.scope_id, mode=payload.mode, mutation=True
+    )
+    return MemoryConsolidationService(runtime.settings, runtime.session_factory).propose(payload)
 
 
 __all__ = ["router"]

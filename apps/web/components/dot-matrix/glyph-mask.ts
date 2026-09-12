@@ -19,7 +19,7 @@ function fontFamily() {
   return (
     getComputedStyle(document.documentElement)
       .getPropertyValue("--font-wordmark")
-      .trim() || 'ui-monospace, "SFMono-Regular", Menlo, monospace'
+      .trim() || '"Geist Mono", "SFMono-Regular", monospace'
   );
 }
 

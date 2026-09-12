@@ -13,6 +13,9 @@ from memoryos.domain.policies import (
     MEMORYOS_POLICY_VERSION,
     SCORE_WEIGHTS,
     TYPE_HALF_LIVES_DAYS,
+    memory_why_for_creation,
+    memory_why_for_reinforcement,
+    memory_why_for_supersession,
 )
 
 __all__ = [
@@ -26,5 +29,7 @@ __all__ = [
     "MEMORYOS_POLICY_VERSION",
     "SCORE_WEIGHTS",
     "TYPE_HALF_LIVES_DAYS",
+    "memory_why_for_creation",
+    "memory_why_for_reinforcement",
+    "memory_why_for_supersession",
 ]
-

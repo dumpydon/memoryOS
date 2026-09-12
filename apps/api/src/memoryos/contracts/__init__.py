@@ -1,5 +1,6 @@
 """Pydantic contracts used as the REST/OpenAPI source of truth."""
 
+from memoryos.contracts.capabilities import CapabilitiesResponse
 from memoryos.contracts.ingestion import (
     CandidateMemory,
     IngestDecision,
@@ -20,9 +21,17 @@ from memoryos.contracts.recall import (
     RecallResponse,
     RecallScoreBreakdown,
 )
+from memoryos.contracts.review import (
+    ConsolidationRequest,
+    ResolveReviewRequest,
+    ReviewItem,
+    ReviewListResponse,
+)
 
 __all__ = [
     "CandidateMemory",
+    "CapabilitiesResponse",
+    "ConsolidationRequest",
     "IngestDecision",
     "IngestInteractionRequest",
     "IngestInteractionResponse",
@@ -36,5 +45,7 @@ __all__ = [
     "RecallResponse",
     "RecallScoreBreakdown",
     "RelationAssessment",
+    "ResolveReviewRequest",
+    "ReviewItem",
+    "ReviewListResponse",
 ]
-

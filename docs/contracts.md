@@ -51,7 +51,15 @@ The response contains `interaction_id`, `status`, `mode`, `decisions`, affected 
 
 A memory response includes `id`, `scope_id`, `lineage_id`, `version`, immutable `content`, `memory_type`, `status`, optional `subject`, `context_key`, and `attribute_key`, normalized `importance` and `confidence`, `reinforcement_count`, timestamps, optional `expires_at`, and optional `superseded_by_id`.
 
+It also includes `why`, a bounded list of deterministic reasons derived from validated evidence, policy outcomes, and confirmation history. Existing rows with no stored Phase 2 explanation receive a deterministic fallback at read time.
+
 `GET /v1/memories/{id}/history` returns every version and event in the lineage. Content is never edited in place when a fact changes. `POST /v1/memories/{id}/forget` soft-forgets the lineage. `POST /v1/memories/{id}/resolve` selects a version for a dispute and records a resolution event.
+
+## Review and consolidation
+
+`GET /v1/reviews` returns durable conflict and consolidation items with candidate/current/source snapshots, proposed relationship, evidence, confidence, and the reason automation paused. `POST /v1/reviews/{id}/resolve` accepts one owner action: `keep_both`, `use_new`, `keep_existing`, or `invalid`. A resolution records events and preserves historical versions. `keep_both` creates a separate active lineage when necessary to preserve the one-active-version-per-lineage invariant.
+
+`POST /v1/consolidations/propose` accepts three to eight source memory IDs. Sources must be active semantic or episodic memories with the same identity/context, compatible embeddings, and conservative pairwise similarity. The proposal remains pending until owner review; approval creates a source-linked memory from the normalized source-vector centroid and leaves every source active.
 
 ## Recall and scoring
 
@@ -86,6 +94,10 @@ Initial half-lives are preference `180`, semantic `365`, episodic `30`, and proc
 - `POST /v1/recall`: explainable retrieval.
 - `POST /v1/recall/compare`: naive vs MemoryOS ranking.
 - `GET /v1/overview`: dashboard counts and recent activity.
+- `GET /v1/capabilities`: non-secret live-provider configuration readiness.
+- `GET /v1/reviews`: list pending or resolved review items.
+- `POST /v1/reviews/{review_id}/resolve`: apply an audited owner decision.
+- `POST /v1/consolidations/propose`: create a conservative review-first proposal.
 - `GET /v1/demo/scenarios`: safe demo replay scenarios.
 
 Errors are `{ "code": string, "message": string, "request_id": string, "retryable": boolean }`. Transport uses `auth_required` for missing owner credentials, `scope_forbidden` for non-demo scopes in public mode, `demo_input_not_allowed` for unlisted public inputs, and `idempotency_conflict` for a reused key with different text.

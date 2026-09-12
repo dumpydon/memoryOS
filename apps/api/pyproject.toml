@@ -1,6 +1,6 @@
 [project]
 name = "memoryos-api"
-version = "0.1.0"
+version = "0.2.0"
 description = "Explainable long-term memory service for AI agents"
 readme = { text = "MemoryOS: explainable long-term memory for AI agents. See the repository README for local setup and architecture.", content-type = "text/plain" }
 requires-python = ">=3.12,<3.14"

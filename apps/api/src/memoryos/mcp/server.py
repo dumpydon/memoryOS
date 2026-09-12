@@ -69,7 +69,7 @@ def create_server(
     owned_runtime = runtime or AppRuntime.create(settings or get_settings())
     server = MCPServer(
         name="MemoryOS",
-        version="0.1.0",
+        version="0.2.0",
         description="Explainable long-term memory tools for AI agents.",
     )
 

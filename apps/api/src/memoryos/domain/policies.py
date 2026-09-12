@@ -23,7 +23,7 @@ if TYPE_CHECKING:
     from memoryos.contracts.memory import MemoryRecord
     from memoryos.contracts.recall import RecallScoreBreakdown
 
-MEMORYOS_POLICY_VERSION: Final[str] = "memoryos-v1"
+MEMORYOS_POLICY_VERSION: Final[str] = "memoryos-v2"
 SCORE_WEIGHTS: Final[dict[str, float]] = {
     "similarity": 0.55,
     "importance": 0.15,
@@ -1063,9 +1063,80 @@ def score_explanation(score: RecallScoreBreakdown) -> str:
     )
     return (
         f"{match_strength} semantic match; confirmed {days} days ago, with {evidence}. "
-        f"Importance {score.importance:.2f}; confidence {score.confidence:.2f}. "
+        f"Semantic relevance {score.similarity:.2f}; importance {score.importance:.2f}; "
+        f"recency {score.recency:.2f}; reinforcement {score.reinforcement:.2f}; "
+        f"confidence {score.confidence:.2f}; final score {score.total:.2f}. "
         f"Policy {score.policy_version}."
     )
+
+
+def memory_why_for_creation(
+    memory_type: MemoryType,
+    *,
+    importance: float,
+    confidence: float,
+    conflict_found: bool = False,
+) -> list[str]:
+    """Return deterministic, plain-language reasons for retaining a memory.
+
+    These reasons are intentionally derived from validated fields.  They do
+    not claim explicit wording or an absence of conflicts unless the caller
+    supplies that evidence.
+    """
+
+    _unit_interval(importance, field_name="importance")
+    _unit_interval(confidence, field_name="confidence")
+    type_reason = {
+        MemoryType.PREFERENCE: "user preference captured from the interaction",
+        MemoryType.SEMANTIC: "durable fact captured from the interaction",
+        MemoryType.EPISODIC: "concrete event captured from the interaction",
+        MemoryType.PROCEDURAL: "repeatable procedure captured from the interaction",
+    }[memory_type]
+    usefulness = (
+        "high expected future usefulness"
+        if float(importance) >= 0.75
+        else "expected future usefulness"
+    )
+    reasons = [
+        type_reason,
+        usefulness,
+        f"confidence {float(confidence):.2f}",
+    ]
+    reasons.append(
+        "an active conflict was preserved for review"
+        if conflict_found
+        else "no conflicting active memory was selected"
+    )
+    return reasons
+
+
+def memory_why_for_reinforcement(reinforcement_count: int) -> list[str]:
+    """Return the stable reason appended after a distinct confirmation."""
+
+    if reinforcement_count < 1:
+        raise ValueError("reinforcement_count must be positive")
+    return [f"confirmed by {reinforcement_count} separate interaction(s)"]
+
+
+def memory_why_for_supersession(
+    *,
+    relation_confidence: float,
+    reason_summary: str,
+    explicit_change: bool = True,
+) -> list[str]:
+    """Return deterministic reasons for a validated replacement version."""
+
+    _unit_interval(relation_confidence, field_name="relation_confidence")
+    reasons = [
+        "newer evidence accepted for the same attribute",
+        f"relationship confidence {float(relation_confidence):.2f}",
+    ]
+    if explicit_change:
+        reasons.append("source interaction contained explicit change language")
+    summary = " ".join(str(reason_summary).split())
+    if summary:
+        reasons.append(summary[:500])
+    return reasons
 
 
 def score_memory(memory: MemoryRecord, raw_similarity: float, as_of: datetime) -> ScoredMemory:
@@ -1136,6 +1207,9 @@ __all__ = [
     "evidence_is_supported",
     "is_eligible_for_recall",
     "meets_relevance_floor",
+    "memory_why_for_creation",
+    "memory_why_for_reinforcement",
+    "memory_why_for_supersession",
     "normalize_text",
     "normalized_similarity",
     "proposition_key",

@@ -9,6 +9,7 @@ import {
   GitBranch,
   LockKeyhole,
   ShieldAlert,
+  Sparkles,
   Trash2,
 } from "lucide-react";
 import Link from "next/link";
@@ -146,6 +147,9 @@ function MemoryDetailContent({
     (version) => version.memory.id === selectedVersion,
   )?.memory;
   const displayMemory = currentVersion || memory;
+  const why = displayMemory.why.length
+    ? displayMemory.why
+    : deriveWhy(displayMemory, history.events);
   return (
     <div className="page-wrap detail-page">
       <Link className="back-link" href="/memories">
@@ -234,6 +238,22 @@ function MemoryDetailContent({
               label="Embedding space"
               value={`${displayMemory.embedding_model} · ${displayMemory.embedding_dimensions}d`}
             />
+          </div>
+          <div className="why-memory-box">
+            <div className="why-memory-heading">
+              <span className="why-memory-icon">
+                <Sparkles size={13} aria-hidden="true" />
+              </span>
+              <div>
+                <span className="review-section-label">Explainability</span>
+                <h3>Remembered because</h3>
+              </div>
+            </div>
+            <ul>
+              {why.map((reason) => (
+                <li key={reason}>{reason}</li>
+              ))}
+            </ul>
           </div>
         </article>
         <article className="panel provenance-card">
@@ -379,4 +399,34 @@ function relativeDays(value: string) {
     (Date.now() - new Date(value).getTime()) / 86_400_000,
   );
   return days <= 0 ? "today" : `${days}d ago`;
+}
+
+function deriveWhy(memory: MemoryRecord, events: MemoryEvent[]) {
+  const memoryEvents = events.filter((event) => event.memory_id === memory.id);
+  if (memory.reinforcement_count > 0) {
+    return [
+      "the same subject and context appeared again",
+      `confirmed by ${memory.reinforcement_count} separate interaction${memory.reinforcement_count === 1 ? "" : "s"}`,
+      `confidence ${memory.confidence.toFixed(2)}`,
+    ];
+  }
+  if (memoryEvents.some((event) => event.event_type === "superseded")) {
+    return [
+      "newer evidence described the same attribute",
+      "the previous version remains available in this lineage",
+      `confidence ${memory.confidence.toFixed(2)}`,
+    ];
+  }
+  if (memoryEvents.some((event) => event.event_type === "disputed")) {
+    return [
+      "the evidence was worth preserving",
+      "MemoryOS could not resolve the conflict safely",
+      "the decision is waiting in Memory review",
+    ];
+  }
+  return [
+    "an explicit signal was found in the interaction",
+    `high expected future usefulness (${memory.importance.toFixed(2)} importance)`,
+    `confidence ${memory.confidence.toFixed(2)}`,
+  ];
 }

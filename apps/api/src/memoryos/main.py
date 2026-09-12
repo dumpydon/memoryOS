@@ -22,7 +22,7 @@ from memoryos.mcp.server import create_http_app
 from memoryos.services.errors import ERROR_HTTP_STATUS, ServiceError
 from memoryos.services.runtime import AppRuntime
 
-MIGRATION_HEAD = "0001_initial_persistence"
+MIGRATION_HEAD = "0002_phase2_engine"
 
 
 def _request_id(request: Request) -> str:
@@ -76,7 +76,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
 
     app = FastAPI(
         title="MemoryOS API",
-        version="0.1.0",
+        version="0.2.0",
         description="Explainable long-term memory infrastructure for AI agents.",
         docs_url="/docs",
         redoc_url="/redoc",

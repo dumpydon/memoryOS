@@ -111,8 +111,8 @@ function OverviewContent({
         />
         <MetricCard
           label="Needs review"
-          value={String(data.disputed_memories)}
-          detail="conflicting evidence"
+          value={String(data.unresolved_review_count ?? data.disputed_memories)}
+          detail="unresolved decisions"
           icon={Clock3}
           tone="amber"
         />

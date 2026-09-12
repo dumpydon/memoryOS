@@ -12,6 +12,10 @@ It is a portfolio-sized engineering system, not a chatbot. The Next.js dashboard
 - **Ingestion Playground** — demo fixture scenarios, preview/commit behavior, structured candidates, policy decisions, and node timings.
 - **Recall Lab** — a fair comparison between naive cosine retrieval and MemoryOS ranking with component contributions.
 - **MCP** — `remember`, `recall`, `forget`, and `list_memories` over the same services as REST.
+- **Memory Review** — inspect unresolved conflicts, resolve them with an audit trail, and review conservative consolidation proposals.
+- **How MemoryOS works** — a short walkthrough of extraction, comparison, storage, and recall.
+
+For server configuration and an arbitrary-input walkthrough, read [Live memory intelligence](docs/live-memory.md).
 
 ## Five-minute local start
 
@@ -67,16 +71,20 @@ pnpm --dir apps/web dev
 
 The REST API is versioned under `/v1`:
 
-| Surface                         | Purpose                                        |
-| ------------------------------- | ---------------------------------------------- |
-| `POST /v1/interactions`         | Preview or commit one interaction              |
-| `GET /v1/memories`              | Explore scoped memories                        |
-| `GET /v1/memories/{id}/history` | Read immutable versions/events                 |
-| `POST /v1/recall`               | Explainable MemoryOS retrieval                 |
-| `POST /v1/recall/compare`       | Same-snapshot naive vs MemoryOS ranking        |
-| `POST /v1/memories/{id}/forget` | Soft-forget a lineage while preserving history |
-| `GET /v1/overview`              | Dashboard metrics and recent events            |
-| `GET /v1/demo/scenarios`        | Finite public fixture catalog                  |
+| Surface                           | Purpose                                        |
+| --------------------------------- | ---------------------------------------------- |
+| `POST /v1/interactions`           | Preview or commit one interaction              |
+| `GET /v1/memories`                | Explore scoped memories                        |
+| `GET /v1/memories/{id}/history`   | Read immutable versions/events                 |
+| `POST /v1/recall`                 | Explainable MemoryOS retrieval                 |
+| `POST /v1/recall/compare`         | Same-snapshot naive vs MemoryOS ranking        |
+| `POST /v1/memories/{id}/forget`   | Soft-forget a lineage while preserving history |
+| `GET /v1/overview`                | Dashboard metrics and recent events            |
+| `GET /v1/capabilities`            | Report live-provider configuration readiness   |
+| `GET /v1/reviews`                 | List pending or resolved review decisions      |
+| `POST /v1/reviews/{id}/resolve`   | Resolve a review with an audited owner action  |
+| `POST /v1/consolidations/propose` | Propose a conservative source-linked memory    |
+| `GET /v1/demo/scenarios`          | Finite public fixture catalog                  |
 
 Run the local MCP stdio server from `apps/api`:
 

@@ -198,6 +198,12 @@ class Memory(Base):
         UUID(as_uuid=True),
         nullable=True,
     )
+    why: Mapped[list[str]] = mapped_column(
+        JSONB,
+        nullable=False,
+        default=list,
+        server_default=sql_text("'[]'::jsonb"),
+    )
 
     __table_args__ = (
         UniqueConstraint("scope_id", "id", name="uq_memories_scope_id"),
@@ -328,6 +334,127 @@ class MemoryEvent(Base):
     )
 
 
+class MemoryReview(Base):
+    """A durable human-review decision for conflicts or consolidation.
+
+    Review payloads intentionally retain snapshots in JSONB.  A memory can
+    acquire a later immutable version or lifecycle state after a review is
+    opened; the reviewer should still see the evidence that caused the review.
+    UUID columns keep the optional materialized memory and source links scoped
+    to the same namespace for safe resolution.
+    """
+
+    __tablename__ = "memory_reviews"
+
+    id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True),
+        primary_key=True,
+        default=uuid.uuid4,
+    )
+    scope_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), nullable=False)
+    kind: Mapped[str] = mapped_column(String(32), nullable=False)
+    status: Mapped[str] = mapped_column(
+        String(32),
+        nullable=False,
+        default="pending",
+        server_default=sql_text("'pending'"),
+    )
+    candidate_json: Mapped[dict[str, Any]] = mapped_column(
+        "candidate",
+        JSONB,
+        nullable=False,
+    )
+    existing_memory_json: Mapped[dict[str, Any] | None] = mapped_column(
+        "existing_memory",
+        JSONB,
+        nullable=True,
+    )
+    source_memories_json: Mapped[list[dict[str, Any]]] = mapped_column(
+        "source_memories",
+        JSONB,
+        nullable=False,
+        default=list,
+        server_default=sql_text("'[]'::jsonb"),
+    )
+    source_memory_ids: Mapped[list[str]] = mapped_column(
+        JSONB,
+        nullable=False,
+        default=list,
+        server_default=sql_text("'[]'::jsonb"),
+    )
+    proposed_relation: Mapped[MemoryRelation] = mapped_column(
+        _native_enum(MemoryRelation, "memory_relation"),
+        nullable=False,
+    )
+    confidence: Mapped[float] = mapped_column(Float, nullable=False)
+    evidence_excerpt: Mapped[str] = mapped_column(Text, nullable=False)
+    reason_code: Mapped[str] = mapped_column(String(100), nullable=False)
+    reason_summary: Mapped[str] = mapped_column(Text, nullable=False)
+    resolution: Mapped[str | None] = mapped_column(String(32), nullable=True)
+    resolution_reason: Mapped[str | None] = mapped_column(Text, nullable=True)
+    memory_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), nullable=True)
+    existing_memory_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True),
+        nullable=True,
+    )
+    mode: Mapped[ExecutionMode] = mapped_column(
+        _native_enum(ExecutionMode, "execution_mode"),
+        nullable=False,
+        default=ExecutionMode.DEMO,
+        server_default=sql_text("'demo'"),
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        nullable=False,
+        server_default=func.now(),
+    )
+    resolved_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True),
+        nullable=True,
+    )
+
+    __table_args__ = (
+        UniqueConstraint("scope_id", "id", name="uq_memory_reviews_scope_id"),
+        ForeignKeyConstraint(
+            ["scope_id"],
+            ["scopes.id"],
+            name="fk_memory_reviews_scope",
+            ondelete="CASCADE",
+        ),
+        ForeignKeyConstraint(
+            ["scope_id", "memory_id"],
+            ["memories.scope_id", "memories.id"],
+            name="fk_memory_reviews_memory_same_scope",
+            ondelete="RESTRICT",
+        ),
+        ForeignKeyConstraint(
+            ["scope_id", "existing_memory_id"],
+            ["memories.scope_id", "memories.id"],
+            name="fk_memory_reviews_existing_memory_same_scope",
+            ondelete="RESTRICT",
+        ),
+        CheckConstraint(
+            "kind IN ('conflict', 'consolidation')",
+            name="ck_memory_reviews_kind",
+        ),
+        CheckConstraint(
+            "status IN ('pending', 'resolved')",
+            name="ck_memory_reviews_status",
+        ),
+        CheckConstraint(
+            "confidence >= 0 AND confidence <= 1",
+            name="ck_memory_reviews_confidence_unit_interval",
+        ),
+        Index(
+            "ix_memory_reviews_scope_status_created",
+            "scope_id",
+            "status",
+            "created_at",
+            "id",
+        ),
+    )
+
+
 # ``JSON`` is imported intentionally for Alembic/SQLAlchemy dialect inspection in
 # downstream tooling.  The runtime columns above use PostgreSQL JSONB.
-__all__ = ["Base", "Interaction", "Memory", "MemoryEvent", "Scope"]
+__all__ = ["Base", "Interaction", "Memory", "MemoryEvent", "MemoryReview", "Scope"]

@@ -3,7 +3,7 @@
 `memoryos.domain.policies` is a pure boundary between model proposals and
 persistence. It performs no I/O, does not mutate Pydantic objects, and never
 turns an unsupported proposal into a write. The current policy identifier is
-`memoryos-v1`.
+`memoryos-v2`.
 
 ## Ingestion calls
 

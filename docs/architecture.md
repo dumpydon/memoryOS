@@ -41,7 +41,9 @@ flowchart TD
 
 The model proposes atomic candidates and relationship labels. Deterministic policy functions then verify evidence, minimum importance/confidence, duplicate targets, scope/model identity, and temporal rules. A provider failure cannot partially advance a memory scope. Committed requests require an idempotency key so a retry returns the existing interaction instead of duplicating it.
 
-Relationship outcomes are `created`, `reinforced`, `superseded`, `disputed`, `skipped`, or `rejected`. A changed fact creates a new immutable version and marks the older version superseded. The old row and its event remain queryable. An unclear conflict remains disputed for review. Forgetting is a soft state transition across a lineage; history remains visible for audit and it should not be described as privacy erasure.
+Relationship outcomes are `created`, `reinforced`, `superseded`, `disputed`, `skipped`, or `rejected`. A changed fact creates a new immutable version and marks the older version superseded. The old row and its event remain queryable. An unclear conflict creates a durable Memory Review item with immutable snapshots. Owner actions preserve audit events; “keep both” uses separate active lineages rather than violating the one-active-version invariant. Forgetting is a soft state transition across a lineage; history remains visible for audit and it should not be described as privacy erasure.
+
+Consolidation is review-first. Three to eight active semantic or episodic memories with the same subject, context, attribute, embedding model, and sufficient pairwise similarity can produce a source-backed proposal. Approval stores a new memory using the normalized centroid of the preserved source vectors. It never deletes or silently rewrites the source rows.
 
 ## Recall score
 

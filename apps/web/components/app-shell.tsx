@@ -27,21 +27,49 @@ export function AppShell({ children }: { children: React.ReactNode }) {
                   in India
                 </span>
                 <nav className="curtain-footer-links" aria-label="Legal">
-                  <Link
-                    href="/legal#terms-of-use"
-                    title="Built by Dumpydon"
-                    aria-label="Terms of use — Built by Dumpydon"
-                  >
-                    Terms of use
-                  </Link>
-                  <span aria-hidden="true">|</span>
-                  <Link
-                    href="/legal#privacy-policy"
-                    title="Built by Dumpydon"
-                    aria-label="Privacy policy — Built by Dumpydon"
-                  >
-                    Privacy policy
-                  </Link>
+                  <span className="curtain-link-wrap">
+                    <Link
+                      href="/legal#terms-of-use"
+                      title="Built by Dumpydon"
+                      aria-describedby="curtain-tooltip-terms"
+                      aria-label="Terms of use — Built by Dumpydon"
+                    >
+                      Terms of use
+                    </Link>
+                    <span
+                      id="curtain-tooltip-terms"
+                      className="curtain-link-tooltip"
+                      role="tooltip"
+                    >
+                      <strong>Built by Dumpydon</strong>
+                      <a href="mailto:apiyush171@gmail.com">
+                        apiyush171@gmail.com
+                      </a>
+                    </span>
+                  </span>
+                  <span className="curtain-footer-divider" aria-hidden="true">
+                    |
+                  </span>
+                  <span className="curtain-link-wrap">
+                    <Link
+                      href="/legal#privacy-policy"
+                      title="Built by Dumpydon"
+                      aria-describedby="curtain-tooltip-privacy"
+                      aria-label="Privacy policy — Built by Dumpydon"
+                    >
+                      Privacy policy
+                    </Link>
+                    <span
+                      id="curtain-tooltip-privacy"
+                      className="curtain-link-tooltip"
+                      role="tooltip"
+                    >
+                      <strong>Built by Dumpydon</strong>
+                      <a href="mailto:apiyush171@gmail.com">
+                        apiyush171@gmail.com
+                      </a>
+                    </span>
+                  </span>
                 </nav>
               </div>
             </div>

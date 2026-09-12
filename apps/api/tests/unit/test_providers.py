@@ -12,7 +12,11 @@ from memoryos.domain.enums import MemoryRelation, MemoryStatus, MemoryType
 from memoryos.providers.demo import DemoEmbeddingProvider, DemoStructuredProvider
 from memoryos.providers.errors import ProviderOutputInvalid, UnsupportedDemoInput
 from memoryos.providers.factory import make_embedding_provider, make_structured_provider
-from memoryos.providers.openai import CandidateBatch, OpenAIProvider, RelationBatch
+from memoryos.providers.openai import (
+    CandidateBatch,
+    OpenAIProvider,
+    RelationBatch,
+)
 
 SCOPE_ID = UUID("00000000-0000-0000-0000-000000000001")
 MEMORY_ID = UUID("00000000-0000-0000-0000-000000000010")
@@ -155,3 +159,118 @@ def test_live_candidate_parsed_output_is_pydantic_validated() -> None:
     )
     provider.settings = Settings()
     assert provider.extract_candidates(text="Atlas prefers concise answers.") == [candidate]
+
+
+def test_live_embedding_rows_are_reordered_by_response_index() -> None:
+    provider = object.__new__(OpenAIProvider)
+    provider.embedding_model = "text-embedding-test"
+    provider.embedding_dimensions = 2
+    provider._client = cast(
+        Any,
+        SimpleNamespace(
+            embeddings=SimpleNamespace(
+                create=lambda **kwargs: SimpleNamespace(
+                    data=[
+                        SimpleNamespace(index=1, embedding=[0.0, 1.0]),
+                        SimpleNamespace(index=0, embedding=[1.0, 0.0]),
+                    ]
+                )
+            )
+        ),
+    )
+
+    assert provider.embed(["first", "second"]) == [[1.0, 0.0], [0.0, 1.0]]
+
+
+def test_live_structured_refusal_and_incomplete_outputs_fail_closed() -> None:
+    provider = object.__new__(OpenAIProvider)
+    provider.model_name = "gpt-test"
+    provider.settings = Settings()
+    candidate = CandidateMemory(
+        candidate_id="c1",
+        content="Atlas prefers concise answers.",
+        memory_type=MemoryType.PREFERENCE,
+        subject="Atlas",
+        context_key="answer-style",
+        attribute_key="response-format",
+        importance=0.8,
+        confidence=0.8,
+        evidence_excerpt="prefers concise answers",
+    )
+    for response in (
+        SimpleNamespace(
+            status="incomplete",
+            output_parsed=CandidateBatch(candidates=[candidate]),
+        ),
+        SimpleNamespace(
+            output=[SimpleNamespace(type="refusal", refusal="not available")],
+        ),
+    ):
+        provider._client = cast(
+            Any,
+            SimpleNamespace(
+                responses=SimpleNamespace(
+                    parse=lambda response=response, **kwargs: response
+                )
+            ),
+        )
+        with pytest.raises(ProviderOutputInvalid):
+            provider.extract_candidates(text="Atlas prefers concise answers.")
+
+
+def test_live_relation_prompt_contains_original_source_context() -> None:
+    provider = object.__new__(OpenAIProvider)
+    provider.model_name = "gpt-test"
+    captured: dict[str, Any] = {}
+
+    def parse(**kwargs: Any) -> Any:
+        captured.update(kwargs)
+        return SimpleNamespace(
+            output_parsed=RelationBatch(
+                relations=[
+                    {
+                        "candidate_id": "c1",
+                        "related_memory_id": None,
+                        "relation": MemoryRelation.NEW,
+                        "confidence": 0.9,
+                        "evidence_excerpt": "prefer concise answers",
+                        "reason_code": "new",
+                        "reason_summary": "No related memory was supplied.",
+                    }
+                ]
+            )
+        )
+
+    provider._client = cast(
+        Any,
+        SimpleNamespace(responses=SimpleNamespace(parse=parse)),
+    )
+    candidate = CandidateMemory(
+        candidate_id="c1",
+        content="Atlas prefers concise answers.",
+        memory_type=MemoryType.PREFERENCE,
+        subject="Atlas",
+        context_key="answer-style",
+        attribute_key="response-format",
+        importance=0.8,
+        confidence=0.8,
+        evidence_excerpt="prefer concise answers",
+    )
+
+    provider.assess_relations(
+        candidates=[candidate],
+        related_memories=[],
+        source_text="Atlas says: I prefer concise answers.",
+    )
+    request_text = "\n".join(
+        str(message.get("content", "")) for message in captured["input"]
+    )
+    assert "<source_interaction>" in request_text
+    assert "I prefer concise answers" in request_text
+
+
+def test_live_structured_envelopes_forbid_unknown_fields() -> None:
+    with pytest.raises(ValueError):
+        CandidateBatch.model_validate({"candidates": [], "unexpected": "value"})
+    with pytest.raises(ValueError):
+        CandidateBatch.model_validate({})

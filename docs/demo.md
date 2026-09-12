@@ -26,6 +26,8 @@ Open `http://127.0.0.1:3000`. If the API is waking or not started, the dashboard
 3. **Memory detail** — read immutable versions and event reasons. Add an owner token in Settings before using forget or dispute resolution.
 4. **Ingestion Playground** — choose a demo fixture scenario, run Preview, and inspect extracted candidates, policy decisions, and actual graph timings. Preview does not mutate the database.
 5. **Recall Lab** — choose a demo fixture query and expand both rankings. The bars expose each API-returned contribution; the UI does not recalculate business ranking.
+6. **Memory Review** — compare the seeded retention-policy conflict, inspect why automation paused, and see the available audited owner actions without changing data.
+7. **How it works** — use the one-minute walkthrough to connect ingestion decisions, immutable history, and hybrid recall.
 
 The catalog includes examples of a preference, a procedural runbook, reinforcement, a superseded preference, a disputed conflict, a stale episodic item, a skipped greeting, and a high-similarity comparison case. These are curated demonstrations of behavior, not a claim that MemoryOS universally beats cosine similarity.
 

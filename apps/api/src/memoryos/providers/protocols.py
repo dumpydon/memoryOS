@@ -17,6 +17,7 @@ class StructuredMemoryProvider(Protocol):
         *,
         candidates: Sequence[CandidateMemory],
         related_memories: Sequence[MemoryRecord],
+        source_text: str | None = None,
     ) -> list[RelationAssessment]: ...
 
 

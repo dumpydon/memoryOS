@@ -90,8 +90,10 @@ export function DotMatrixWordmark() {
 
     const rebuild = () => {
       const bounds = section.getBoundingClientRect();
-      const width = Math.max(280, bounds.width);
-      const height = Math.max(180, bounds.height);
+      // Match the reference cloud's minimum raster size. The CSS stage can be
+      // smaller on mobile, but the mask still samples the same coordinate field.
+      const width = Math.max(320, bounds.width);
+      const height = Math.max(360, bounds.height);
       const dpr = Math.min(2, window.devicePixelRatio || 1);
       canvas.width = Math.round(width * dpr);
       canvas.height = Math.round(height * dpr);
@@ -104,7 +106,7 @@ export function DotMatrixWordmark() {
       drawFrame(
         context,
         cloud,
-        reducedMotion.matches ? 9 : performance.now() / 1000 - startedAt,
+        reducedMotion.matches ? 8.25 : performance.now() / 1000 - startedAt,
       );
       if (visible && !reducedMotion.matches && !animationFrame) start();
       else
@@ -116,7 +118,6 @@ export function DotMatrixWordmark() {
     };
 
     const start = () => {
-      visible = true;
       if (reducedMotion.matches || animationFrame || !cloud) {
         if (reducedMotion.matches) canvas.dataset.animation = "reduced";
         return;
@@ -127,14 +128,14 @@ export function DotMatrixWordmark() {
     };
 
     const stop = () => {
-      visible = false;
       if (animationFrame) cancelAnimationFrame(animationFrame);
       animationFrame = 0;
-      if (!reducedMotion.matches) canvas.dataset.animation = "paused";
+      canvas.dataset.animation = "paused";
     };
 
     const intersectionObserver = new IntersectionObserver(
       ([entry]) => {
+        visible = entry.isIntersecting;
         if (entry.isIntersecting) start();
         else stop();
       },
@@ -151,7 +152,7 @@ export function DotMatrixWordmark() {
     const onMotionChange = () => {
       stop();
       rebuild();
-      if (!reducedMotion.matches) start();
+      if (visible) start();
     };
     reducedMotion.addEventListener("change", onMotionChange);
     void document.fonts.ready.then(() => {

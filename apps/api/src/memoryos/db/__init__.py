@@ -8,7 +8,7 @@ from memoryos.db.errors import (
     ScopeNotFoundError,
     ScopeRevisionConflict,
 )
-from memoryos.db.models import Base, Interaction, Memory, MemoryEvent, Scope
+from memoryos.db.models import Base, Interaction, Memory, MemoryEvent, MemoryReview, Scope
 from memoryos.db.repositories import (
     InteractionResult,
     MemoryRepository,
@@ -29,6 +29,7 @@ __all__ = [
     "InvalidEmbedding",
     "Memory",
     "MemoryEvent",
+    "MemoryReview",
     "MemoryRepository",
     "PersistenceError",
     "RecallCandidate",

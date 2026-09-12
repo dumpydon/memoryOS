@@ -16,8 +16,9 @@ from memoryos.contracts.recall import RecallRequest
 from memoryos.db.models import Memory, MemoryEvent, Scope
 from memoryos.db.repositories import MemoryRepository
 from memoryos.db.session import create_db_engine, create_session_factory
-from memoryos.domain.enums import MemoryStatus, MemoryType
+from memoryos.domain.enums import ExecutionMode, MemoryStatus, MemoryType
 from memoryos.seed.catalog import DEMO_MODEL, fixture_embeddings
+from memoryos.services.errors import ServiceError
 from memoryos.services.query import MemoryQueryService
 
 
@@ -29,6 +30,15 @@ def _settings() -> Settings:
         ),
         demo_embedding_model=DEMO_MODEL,
     )
+
+
+def test_live_recall_without_key_has_clear_provider_error() -> None:
+    service = MemoryQueryService(Settings(openai_api_key=None))
+    with pytest.raises(ServiceError) as error:
+        service._embed_query(query="Which examples should I use?", mode=ExecutionMode.LIVE)
+    assert getattr(error.value, "code", None) == "provider_unavailable"
+    assert "OPENAI_API_KEY" in str(error.value)
+    service.close()
 
 
 @pytest.fixture(scope="session")
@@ -212,4 +222,4 @@ def test_recall_and_compare_use_curated_fixture_snapshot(service_context) -> Non
     assert response.items
     assert response.items[0].score.raw_similarity >= response.items[-1].score.raw_similarity
     assert comparison.candidate_count == response.candidate_count
-    assert all(item.memoryos_score.policy_version == "memoryos-v1" for item in comparison.memoryos)
+    assert all(item.memoryos_score.policy_version == "memoryos-v2" for item in comparison.memoryos)

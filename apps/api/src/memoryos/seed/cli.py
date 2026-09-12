@@ -13,6 +13,7 @@ from sqlalchemy.orm import Session, sessionmaker
 
 from memoryos.config import Settings, get_settings
 from memoryos.db.models import Memory
+from memoryos.db.models import MemoryEvent as MemoryEventRow
 from memoryos.db.repositories import MemoryRepository
 from memoryos.db.session import create_session_factory
 from memoryos.domain.enums import (
@@ -129,8 +130,17 @@ def _write_spec(
         interaction_id=interaction.id,
         event_type=event_type,
         relation=relation,
-        reason_code="demo_seed",
-        reason_summary="Authored MemoryOS demo fixture.",
+        reason_code=(
+            "demo_ambiguous_conflict"
+            if spec.status is MemoryStatus.DISPUTED
+            else "demo_seed"
+        ),
+        reason_summary=(
+            "Two plausible values share the same subject, context, and attribute "
+            "without clear correction evidence."
+            if spec.status is MemoryStatus.DISPUTED
+            else "Authored MemoryOS demo fixture."
+        ),
         provenance="demo-fixture",
         after={"status": spec.status.value, "seed_key": spec.key},
     )
@@ -164,6 +174,29 @@ def _write_spec(
     return 1, event_count
 
 
+def _ensure_demo_reviews(session: Session, repo: MemoryRepository) -> None:
+    """Backfill review items for demos seeded before the Phase 2 migration."""
+
+    disputed_events = list(
+        session.scalars(
+            select(MemoryEventRow)
+            .where(
+                MemoryEventRow.scope_id == DEMO_SCOPE_ID,
+                MemoryEventRow.event_type == MemoryEventType.DISPUTED,
+            )
+            .order_by(MemoryEventRow.created_at, MemoryEventRow.id)
+        )
+    )
+    for event in disputed_events:
+        review = repo.ensure_conflict_review(event)
+        if review is not None and review.reason_code == "demo_seed":
+            review.reason_code = "demo_ambiguous_conflict"
+            review.reason_summary = (
+                "Two plausible values share the same subject, context, and attribute "
+                "without clear correction evidence."
+            )
+
+
 def seed_demo(
     settings: Settings | None = None,
     *,
@@ -184,6 +217,7 @@ def seed_demo(
             }
             specs = [spec for spec in seed_specs() if spec.content not in existing_keys]
             if not specs:
+                _ensure_demo_reviews(session, repo)
                 return SeedSummary(
                     demo_scope_id=str(DEMO_SCOPE_ID),
                     live_scope_id=str(LIVE_SCOPE_ID),
@@ -227,6 +261,7 @@ def seed_demo(
                             raise RuntimeError(f"missing seeded row {spec.key}")
                         row.superseded_by_id = target.id
                 session.flush()
+            _ensure_demo_reviews(session, repo)
             return SeedSummary(
                 demo_scope_id=str(DEMO_SCOPE_ID),
                 live_scope_id=str(LIVE_SCOPE_ID),

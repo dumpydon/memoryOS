@@ -31,6 +31,7 @@ class MemoryRecord(ContractModel):
     last_confirmed_at: datetime
     expires_at: datetime | None = None
     superseded_by_id: UUID | None = None
+    why: list[str] = Field(default_factory=list)
 
 
 class MemoryVersion(ContractModel):

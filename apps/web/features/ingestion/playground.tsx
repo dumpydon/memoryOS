@@ -22,7 +22,11 @@ import {
 } from "@/components/status-state";
 import { TypeBadge } from "@/components/type-badge";
 import { useWorkspace } from "@/components/workspace-context";
-import { getDemoCatalog, postInteraction } from "@/lib/api/queries";
+import {
+  getCapabilities,
+  getDemoCatalog,
+  postInteraction,
+} from "@/lib/api/queries";
 import type { DemoScenario, IngestInteractionResponse } from "@/lib/api/types";
 
 export function IngestionPlayground() {
@@ -34,6 +38,10 @@ export function IngestionPlayground() {
     queryKey: ["demo-catalog"],
     queryFn: () => getDemoCatalog(token),
     enabled: mode === "demo",
+  });
+  const capabilities = useQuery({
+    queryKey: ["capabilities"],
+    queryFn: () => getCapabilities(token),
   });
   const scenarioId = searchParams.get("scenario") || "";
   const [text, setText] = useState("");
@@ -58,6 +66,10 @@ export function IngestionPlayground() {
     [scenarioId, scenarios],
   );
   const displayText = mode === "demo" ? selectedScenario?.text || "" : text;
+  const liveUnavailable =
+    mode === "live" &&
+    capabilities.data &&
+    !capabilities.data.live_ingestion_available;
 
   const ingest = useMutation({
     mutationFn: ({ preview }: { preview: boolean }) =>
@@ -131,6 +143,15 @@ export function IngestionPlayground() {
         message: "Live ingestion requires an owner token. Add one in Settings.",
         tone: "warning",
       });
+    if (mode === "live" && capabilities.data?.live_ingestion_available !== true)
+      return setNotice({
+        message:
+          capabilities.data?.reason ||
+          (capabilities.isPending
+            ? "Checking live provider readiness. Try again in a moment."
+            : "Live ingestion is unavailable until OPENAI_API_KEY is configured on the API server."),
+        tone: "warning",
+      });
     ingest.mutate({ preview });
   }
 
@@ -156,6 +177,15 @@ export function IngestionPlayground() {
           </span>
         </div>
       </header>
+
+      {liveUnavailable ? (
+        <InlineNotice tone="warning">
+          <ShieldAlert size={15} />
+          Live ingestion is unavailable because the API server has no OpenAI
+          key configured. Add <code>OPENAI_API_KEY</code> to the API
+          environment, then refresh this page. Demo mode remains available.
+        </InlineNotice>
+      ) : null}
 
       <div className="playground-layout">
         <section className="panel interaction-editor">

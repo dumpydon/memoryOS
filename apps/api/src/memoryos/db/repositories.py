@@ -25,6 +25,7 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from memoryos.config import Settings, get_settings
+from memoryos.contracts.ingestion import CandidateMemory
 from memoryos.contracts.memory import (
     MemoryEvent as MemoryEventContract,
 )
@@ -42,7 +43,7 @@ from memoryos.db.errors import (
     InvalidEmbedding,
     ScopeNotFoundError,
 )
-from memoryos.db.models import Interaction, Memory, MemoryEvent, Scope
+from memoryos.db.models import Interaction, Memory, MemoryEvent, MemoryReview, Scope
 from memoryos.db.transactions import ScopeRevision, scope_revision_transaction
 from memoryos.domain.enums import (
     ExecutionMode,
@@ -51,6 +52,11 @@ from memoryos.domain.enums import (
     MemoryRelation,
     MemoryStatus,
     MemoryType,
+)
+from memoryos.domain.policies import (
+    memory_why_for_creation,
+    memory_why_for_reinforcement,
+    memory_why_for_supersession,
 )
 
 VECTOR_DIMENSIONS = 1536
@@ -87,6 +93,25 @@ def _jsonable(value: Any) -> Any:
     if enum_value is not None:
         return _jsonable(enum_value)
     return str(value)
+
+
+def _why_values(value: Sequence[str] | None) -> list[str]:
+    """Normalize stored explanations without allowing unbounded JSON payloads."""
+
+    if value is None:
+        return []
+    result: list[str] = []
+    for item in value:
+        if not isinstance(item, str):
+            continue
+        text = " ".join(item.split())
+        if text and text not in result:
+            result.append(text[:500])
+    return result[:8]
+
+
+def _append_why(row: Memory, values: Sequence[str]) -> None:
+    row.why = _why_values([*(row.why or []), *values])
 
 
 def _enum_value(value: Any, enum_type: type[Any]) -> Any:
@@ -228,6 +253,12 @@ def _interaction_result(row: Interaction) -> InteractionResult:
 
 def _memory_record(row: Memory) -> MemoryRecord:
     vector = _row_vector(row)
+    why = _why_values(row.why) or memory_why_for_creation(
+        row.memory_type,
+        importance=row.importance,
+        confidence=row.confidence,
+        conflict_found=row.status is MemoryStatus.DISPUTED,
+    )
     return MemoryRecord(
         id=row.id,
         scope_id=row.scope_id,
@@ -249,6 +280,7 @@ def _memory_record(row: Memory) -> MemoryRecord:
         last_confirmed_at=row.last_confirmed_at,
         expires_at=row.expires_at,
         superseded_by_id=row.superseded_by_id,
+        why=why,
     )
 
 
@@ -504,6 +536,7 @@ class MemoryRepository:
         last_confirmed_at: datetime | None = None,
         expires_at: datetime | None = None,
         superseded_by_id: UUID | None = None,
+        why: Sequence[str] | None = None,
     ) -> StoredMemory:
         scope = self.require_scope(scope_id)
         vector = _validate_vector(embedding)
@@ -535,6 +568,14 @@ class MemoryRepository:
             ),
             expires_at=_aware(expires_at) if expires_at else None,
             superseded_by_id=superseded_by_id,
+            why=_why_values(why)
+            if why is not None
+            else memory_why_for_creation(
+                _enum_value(memory_type, MemoryType),
+                importance=float(importance),
+                confidence=float(confidence),
+                conflict_found=_enum_value(status, MemoryStatus) is MemoryStatus.DISPUTED,
+            ),
         )
         self.session.add(row)
         self.session.flush()
@@ -630,6 +671,10 @@ class MemoryRepository:
         )
         row.reinforcement_count += 1
         row.last_confirmed_at = confirmed
+        _append_why(
+            row,
+            memory_why_for_reinforcement(row.reinforcement_count),
+        )
         event = MemoryEvent(
             scope_id=scope_id,
             memory_id=memory_id,
@@ -704,7 +749,243 @@ class MemoryRepository:
         )
         self.session.add(event)
         self.session.flush()
+        memory_row = self.session.scalar(
+            select(Memory).where(
+                Memory.scope_id == scope_id,
+                Memory.id == memory_id,
+            )
+        )
+        if memory_row is not None and event.event_type is MemoryEventType.SUPERSEDED:
+            confidence = memory_row.confidence
+            if isinstance(after, dict) and isinstance(after.get("confidence"), (int, float)):
+                confidence = float(after["confidence"])
+            _append_why(
+                memory_row,
+                memory_why_for_supersession(
+                    relation_confidence=confidence,
+                    reason_summary=reason_summary,
+                ),
+            )
+            self.session.flush()
+        if event.event_type is MemoryEventType.DISPUTED:
+            self._ensure_conflict_review(event)
         return _event_contract(event)
+
+    def _ensure_conflict_review(self, event: MemoryEvent) -> MemoryReview | None:
+        """Create one pending review for a disputed memory event.
+
+        Ingestion already persists the disputed candidate as an immutable row.
+        Deriving the candidate snapshot here keeps the hook compatible with all
+        ingestion providers and prevents a provider from writing a review row
+        directly.  Existing pending reviews are reused for idempotent retries.
+        """
+
+        candidate_row = self.session.scalar(
+            select(Memory).where(
+                Memory.scope_id == event.scope_id,
+                Memory.id == event.memory_id,
+            )
+        )
+        if candidate_row is None:
+            return None
+        related_id = event.related_memory_id
+        if related_id is None:
+            related_id = self.session.scalar(
+                select(Memory.id)
+                .where(
+                    Memory.scope_id == event.scope_id,
+                    Memory.lineage_id == candidate_row.lineage_id,
+                    Memory.id != candidate_row.id,
+                )
+                .order_by(Memory.version.desc(), Memory.id.desc())
+                .limit(1)
+            )
+        existing = self.get_by_id(event.scope_id, related_id) if related_id else None
+        pending = self.session.scalar(
+            select(MemoryReview)
+            .where(
+                MemoryReview.scope_id == event.scope_id,
+                MemoryReview.kind == "conflict",
+                MemoryReview.status == "pending",
+                MemoryReview.memory_id == event.memory_id,
+            )
+            .with_for_update()
+        )
+        if pending is not None:
+            if pending.existing_memory_id is None and existing is not None:
+                pending.existing_memory_id = existing.id
+                pending.existing_memory_json = cast(dict[str, Any], _jsonable(existing))
+                self.session.flush()
+            return pending
+        evidence = (event.evidence_excerpt or candidate_row.content)[:1000]
+        candidate = CandidateMemory(
+            candidate_id=f"memory-{candidate_row.id}",
+            content=candidate_row.content,
+            memory_type=candidate_row.memory_type,
+            subject=candidate_row.subject,
+            context_key=candidate_row.context_key,
+            attribute_key=candidate_row.attribute_key,
+            importance=candidate_row.importance,
+            confidence=candidate_row.confidence,
+            evidence_excerpt=evidence,
+            effective_at=candidate_row.effective_at,
+            expires_at=candidate_row.expires_at,
+        )
+        interaction = (
+            self.get_interaction(scope_id=event.scope_id, interaction_id=event.interaction_id)
+            if event.interaction_id is not None
+            else None
+        )
+        return self.create_review(
+            scope_id=event.scope_id,
+            kind="conflict",
+            candidate=candidate,
+            existing_memory=existing,
+            source_memories=(),
+            proposed_relation=MemoryRelation.DISPUTE,
+            confidence=event.after.get("confidence", candidate.confidence)
+            if isinstance(event.after, dict)
+            else candidate.confidence,
+            evidence_excerpt=evidence,
+            reason_code=event.reason_code,
+            reason_summary=event.reason_summary,
+            memory_id=event.memory_id,
+            existing_memory_id=related_id,
+            mode=interaction.mode if interaction is not None else ExecutionMode.DEMO,
+        )
+
+    def ensure_conflict_review(self, event: MemoryEvent) -> MemoryReview | None:
+        """Reconcile a disputed event into the review inbox idempotently."""
+
+        if not isinstance(event, MemoryEvent):
+            raise ValueError("event must be a MemoryEvent row")
+        return self._ensure_conflict_review(event)
+
+    # -- review inbox ---------------------------------------------------
+
+    def create_review(
+        self,
+        *,
+        scope_id: UUID,
+        kind: str,
+        candidate: CandidateMemory,
+        existing_memory: MemoryRecord | None = None,
+        source_memories: Sequence[MemoryRecord] = (),
+        proposed_relation: MemoryRelation = MemoryRelation.DISPUTE,
+        confidence: float,
+        evidence_excerpt: str,
+        reason_code: str,
+        reason_summary: str,
+        memory_id: UUID | None = None,
+        existing_memory_id: UUID | None = None,
+        mode: ExecutionMode = ExecutionMode.DEMO,
+        review_id: UUID | None = None,
+        created_at: datetime | None = None,
+    ) -> MemoryReview:
+        """Persist a review snapshot inside the caller-owned transaction."""
+
+        self.require_scope(scope_id)
+        if kind not in {"conflict", "consolidation"}:
+            raise ValueError("review kind must be conflict or consolidation")
+        if not isinstance(candidate, CandidateMemory):
+            raise ValueError("review candidate must be a CandidateMemory")
+        if not isinstance(evidence_excerpt, str) or not evidence_excerpt.strip():
+            raise ValueError("review evidence must contain text")
+        numeric_confidence = float(confidence)
+        if not math.isfinite(numeric_confidence) or not 0 <= numeric_confidence <= 1:
+            raise ValueError("review confidence must be in [0, 1]")
+        source_list = list(source_memories)
+        for source in source_list:
+            if not isinstance(source, MemoryRecord) or source.scope_id != scope_id:
+                raise ValueError("review source memories must belong to the scope")
+        if existing_memory is not None and existing_memory.scope_id != scope_id:
+            raise ValueError("review existing memory must belong to the scope")
+        if memory_id is not None:
+            memory_row = self.session.scalar(
+                select(Memory).where(Memory.scope_id == scope_id, Memory.id == memory_id)
+            )
+            if memory_row is None:
+                raise ValueError("review memory must belong to the scope")
+        if existing_memory_id is None and existing_memory is not None:
+            existing_memory_id = existing_memory.id
+        row = MemoryReview(
+            id=review_id or uuid.uuid4(),
+            scope_id=scope_id,
+            kind=kind,
+            status="pending",
+            candidate_json=cast(dict[str, Any], _jsonable(candidate)),
+            existing_memory_json=(
+                cast(dict[str, Any], _jsonable(existing_memory))
+                if existing_memory is not None
+                else None
+            ),
+            source_memories_json=cast(
+                list[dict[str, Any]], _jsonable(source_list)
+            ),
+            source_memory_ids=[str(source.id) for source in source_list],
+            proposed_relation=_enum_value(proposed_relation, MemoryRelation),
+            confidence=numeric_confidence,
+            evidence_excerpt=evidence_excerpt[:1000],
+            reason_code=reason_code[:100],
+            reason_summary=reason_summary,
+            memory_id=memory_id,
+            existing_memory_id=existing_memory_id,
+            mode=_enum_value(mode, ExecutionMode),
+            created_at=_aware(created_at) if created_at else None,
+        )
+        self.session.add(row)
+        self.session.flush()
+        return row
+
+    def get_review(
+        self,
+        *,
+        scope_id: UUID,
+        review_id: UUID,
+        for_update: bool = False,
+    ) -> MemoryReview | None:
+        statement = select(MemoryReview).where(
+            MemoryReview.scope_id == scope_id,
+            MemoryReview.id == review_id,
+        )
+        if for_update:
+            statement = statement.with_for_update()
+        return self.session.scalar(statement)
+
+    def list_reviews(
+        self,
+        *,
+        scope_id: UUID,
+        status: str | None = "pending",
+        limit: int = 50,
+    ) -> tuple[list[MemoryReview], int]:
+        """Return review rows in stable newest-first order and their total."""
+
+        if limit < 1:
+            raise ValueError("review limit must be positive")
+        limit = min(limit, 100)
+        conditions: list[Any] = [MemoryReview.scope_id == scope_id]
+        if status is not None:
+            if status not in {"pending", "resolved"}:
+                raise ValueError("review status must be pending or resolved")
+            conditions.append(MemoryReview.status == status)
+        total = int(
+            self.session.scalar(
+                select(func.count()).select_from(
+                    select(MemoryReview.id).where(*conditions).subquery()
+                )
+            )
+            or 0
+        )
+        rows = list(
+            self.session.scalars(
+                select(MemoryReview)
+                .where(*conditions)
+                .order_by(MemoryReview.created_at.desc(), MemoryReview.id.desc())
+                .limit(limit)
+            )
+        )
+        return rows, total
 
     def get_history(self, *, scope_id: UUID, memory_id: UUID) -> MemoryHistoryResponse | None:
         selected = self.session.scalar(
