@@ -1102,6 +1102,17 @@ h1 {
   padding: 12px 14px;
   margin-bottom: 15px;
 }
+.refreshing-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  background: var(--surface-muted);
+  color: var(--muted);
+  font-size: 10px;
+  padding: 7px 9px;
+}
 .search-field {
   display: flex;
   align-items: center;
@@ -2031,8 +2042,12 @@ h1 {
   background: var(--surface-elevated);
   box-shadow: 0 14px 34px rgb(20 25 34 / 18%);
   color: var(--ink);
+  pointer-events: none;
   padding: 12px 12px 12px 13px;
   animation: ingestion-toast-in 0.2s ease both;
+}
+.ingestion-toast > * {
+  pointer-events: auto;
 }
 .ingestion-toast > svg {
   flex: 0 0 auto;

@@ -5,6 +5,7 @@ import {
   ChevronLeft,
   ChevronRight,
   Filter,
+  LoaderCircle,
   Search,
   SlidersHorizontal,
 } from "lucide-react";
@@ -111,6 +112,12 @@ export function MemoryExplorer() {
           </p>
         </div>
         <div className="header-actions">
+          {memories.isFetching && memories.data ? (
+            <span className="refreshing-pill" role="status">
+              <LoaderCircle className="spin" size={13} aria-hidden="true" />
+              Refreshing
+            </span>
+          ) : null}
           <span className="count-pill">
             {memories.data?.total ?? "—"} memories
           </span>

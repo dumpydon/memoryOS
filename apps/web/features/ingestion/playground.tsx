@@ -1,6 +1,12 @@
 "use client";
 
-import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import {
+  useMutation,
+  useQuery,
+  useQueryClient,
+  type QueryClient,
+  type QueryKey,
+} from "@tanstack/react-query";
 import {
   ArrowRight,
   ArrowUpRight,
@@ -108,8 +114,8 @@ export function IngestionPlayground() {
     !capabilities.data.live_ingestion_available;
 
   const ingest = useMutation({
-    mutationFn: ({ preview }: { preview: boolean }) =>
-      postInteraction(
+    mutationFn: async ({ preview }: { preview: boolean }) => {
+      const response = await postInteraction(
         {
           scope_id: scopeId,
           text: displayText.trim(),
@@ -122,14 +128,15 @@ export function IngestionPlayground() {
           preview,
         },
         token,
-      ),
+      );
+      if (!preview) {
+        refreshIngestionCaches(queryClient, response, scopeId, mode);
+      }
+      return response;
+    },
     onSuccess: (response, variables) => {
       setResult(response);
       showFeedback(feedbackForResult(response, variables.preview));
-      if (!variables.preview) {
-        void queryClient.invalidateQueries({ queryKey: ["overview"] });
-        void queryClient.invalidateQueries({ queryKey: ["memories"] });
-      }
     },
     onError: (error, variables) => {
       const apiError = error instanceof ApiClientError ? error : null;
@@ -422,6 +429,48 @@ export function IngestionPlayground() {
       ) : null}
     </div>
   );
+}
+
+function refreshIngestionCaches(
+  queryClient: QueryClient,
+  response: IngestInteractionResponse,
+  scopeId: string,
+  mode: IngestInteractionResponse["mode"],
+) {
+  const affectedMemoryIds = new Set(
+    response.memory_ids.map((memoryId) => String(memoryId)),
+  );
+  response.decisions.forEach((decision) => {
+    if (decision.memory_id) affectedMemoryIds.add(String(decision.memory_id));
+    if (decision.related_memory_id) {
+      affectedMemoryIds.add(String(decision.related_memory_id));
+    }
+  });
+
+  const staleKeys: QueryKey[] = [
+    ["memories"],
+    ["review-memory-pool", scopeId, mode],
+  ];
+  affectedMemoryIds.forEach((memoryId) => {
+    staleKeys.push(
+      ["memory", scopeId, memoryId],
+      ["memory-history", scopeId, memoryId],
+    );
+  });
+  const hasReviewImpact = response.decisions.some(
+    (decision) => decision.decision_type === "disputed",
+  );
+  if (hasReviewImpact) {
+    staleKeys.push(["reviews", scopeId, mode]);
+  }
+
+  for (const queryKey of staleKeys) {
+    void queryClient.invalidateQueries({ queryKey, refetchType: "none" });
+  }
+  void queryClient.invalidateQueries({
+    queryKey: ["overview", scopeId, mode],
+    refetchType: "active",
+  });
 }
 
 const processingStages = [
