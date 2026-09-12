@@ -41,6 +41,7 @@ TYPE_HALF_LIVES_DAYS: Final[dict[MemoryType, int]] = {
 MIN_IMPORTANCE: Final[float] = 0.30
 MIN_CONFIDENCE: Final[float] = 0.60
 MAX_REINFORCED_CONFIDENCE: Final[float] = 0.95
+REINFORCE_RELATION_CONFIDENCE: Final[float] = 0.85
 SUPERSEDE_RELATION_CONFIDENCE: Final[float] = 0.85
 DEFAULT_MIN_SIMILARITY: Final[float] = 0.25
 
@@ -66,6 +67,116 @@ _EXPLICIT_CHANGE_RE = re.compile(
     r"changed?|updated?|correction|correct(?:ion)?|switch(?:ed)?|"
     r"replace(?:d)?|rather\s+than)\b",
     re.IGNORECASE,
+)
+_REINFORCEMENT_NEGATION_RE = re.compile(
+    r"\b(?:not|never|without|no|don't|doesn't|didn't|can't|cannot|won't|wouldn't|"
+    r"isn't|aren't|neither|nor)\b",
+    re.IGNORECASE,
+)
+_REINFORCEMENT_REPLACEMENT_RE = re.compile(
+    r"\b(?:used\s+to|previously|formerly|no\s+longer|anymore|from\s+now\s+on|"
+    r"instead\s+of|rather\s+than|replace(?:d|ment)?|switch(?:ed|ing)?|"
+    r"changed?|updated?|correction)\b|"
+    r"\bnow\s+(?:prefer|want|use|choose|favor|need)\b",
+    re.IGNORECASE,
+)
+_WORD_RE = re.compile(r"[a-z0-9]+")
+_PROPOSITION_STOPWORDS: Final[frozenset[str]] = frozenset(
+    {
+        "a",
+        "an",
+        "and",
+        "are",
+        "as",
+        "at",
+        "be",
+        "by",
+        "for",
+        "from",
+        "has",
+        "have",
+        "in",
+        "is",
+        "it",
+        "its",
+        "of",
+        "on",
+        "or",
+        "please",
+        "that",
+        "the",
+        "their",
+        "this",
+        "to",
+        "when",
+        "while",
+        "with",
+        "i",
+        "me",
+        "my",
+        "we",
+        "our",
+        "you",
+        "your",
+        "they",
+        "them",
+        "still",
+        "strongly",
+        "really",
+        "very",
+        "keep",
+        "keeps",
+        "continue",
+        "continued",
+        "show",
+        "showing",
+        "also",
+        "just",
+    }
+)
+_PROPOSITION_PREDICATES: Final[frozenset[str]] = frozenset(
+    {
+        "prefer",
+        "like",
+        "want",
+        "need",
+        "use",
+        "choose",
+        "favor",
+        "enjoy",
+        "ask",
+        "request",
+    }
+)
+_TOKEN_ALIASES: Final[dict[str, str]] = {
+    "brief": "concise",
+    "short": "concise",
+    "succinct": "concise",
+    "likes": "prefer",
+    "liked": "prefer",
+    "prefers": "prefer",
+    "preferred": "prefer",
+    "wants": "want",
+    "wanted": "want",
+    "favors": "favor",
+    "favored": "favor",
+    "focused": "focus",
+}
+_GENERIC_KEY_TOKENS: Final[frozenset[str]] = frozenset(
+    {
+        "choice",
+        "format",
+        "language",
+        "length",
+        "mode",
+        "option",
+        "preference",
+        "setting",
+        "state",
+        "style",
+        "type",
+        "value",
+    }
 )
 
 if TYPE_CHECKING:
@@ -532,12 +643,13 @@ def validate_reinforcement(
     trigger: str = "ingestion",
     used_candidate_ids: Collection[str] = (),
     relation_confidence: float | None = None,
+    source_text: str | None = None,
 ) -> PolicyAction:
-    """Permit reinforcement only for a same-context proposition and new interaction.
+    """Permit reinforcement only for a source-supported same-context proposition.
 
-    Exact normalized content is the normal fast path. A paraphrase is accepted
-    only when the relation assessment supplies at least ``0.85`` confidence and
-    all identity keys and the memory type match.
+    Exact normalized content is the fast path. A paraphrase additionally needs a
+    high-confidence relationship assessment, compatible identity keys, enough
+    deterministic proposition overlap, and no negation or replacement language.
     """
 
     candidate_id = getattr(candidate, "candidate_id", None)
@@ -582,30 +694,79 @@ def validate_reinforcement(
             candidate_id=candidate.candidate_id,
             related_memory_id=existing_memory.id,
         )
-    exact_match = same_proposition(candidate, existing_memory)
-    if not exact_match and (
-        relation_confidence is None
-        or relation_confidence < SUPERSEDE_RELATION_CONFIDENCE
-        or not _same_identity(candidate, existing_memory)
+    if source_text is not None and _has_reinforcement_change_language(
+        source_text, candidate.evidence_excerpt
     ):
         return _reject(
-            "proposition_mismatch",
-            (
-                "Reinforcement requires the same proposition or a high-confidence "
-                "same-context paraphrase."
-            ),
+            "reinforcement_change_language",
+            "Negation or temporal replacement language cannot reinforce a memory.",
             candidate_id=candidate.candidate_id,
             related_memory_id=existing_memory.id,
         )
+    exact_match = same_proposition(candidate, existing_memory)
+    if not exact_match:
+        if source_text is None:
+            return _reject(
+                "reinforcement_source_required",
+                "A paraphrase cannot be reinforced without source-backed interaction evidence.",
+                candidate_id=candidate.candidate_id,
+                related_memory_id=existing_memory.id,
+            )
+        if not evidence_is_supported(source_text, candidate.evidence_excerpt):
+            return _reject(
+                "unsupported_evidence",
+                "Candidate evidence is not a normalized substring of the source interaction.",
+                candidate_id=candidate.candidate_id,
+                related_memory_id=existing_memory.id,
+            )
+        if (
+            relation_confidence is None
+            or relation_confidence < REINFORCE_RELATION_CONFIDENCE
+        ):
+            return _reject(
+                "low_relation_confidence",
+                (
+                    "A paraphrase needs relationship confidence of at least "
+                    f"{REINFORCE_RELATION_CONFIDENCE:.2f}."
+                ),
+                candidate_id=candidate.candidate_id,
+                related_memory_id=existing_memory.id,
+            )
+        if not _same_reinforcement_identity(candidate, existing_memory):
+            return _reject(
+                "reinforcement_identity_mismatch",
+                (
+                    "Reinforcement requires the same subject and memory type, plus "
+                    "compatible context and attribute keys."
+                ),
+                candidate_id=candidate.candidate_id,
+                related_memory_id=existing_memory.id,
+            )
+        if not _same_semantic_proposition(candidate, existing_memory):
+            return _reject(
+                "semantic_proposition_mismatch",
+                "The source does not support the same durable proposition as the related memory.",
+                candidate_id=candidate.candidate_id,
+                related_memory_id=existing_memory.id,
+            )
 
     updated_confidence = reinforced_confidence(existing_memory.confidence, candidate.confidence)
+    reason_code = (
+        "same_proposition_new_interaction"
+        if exact_match
+        else "same_context_paraphrase_new_interaction"
+    )
+    reason_summary = (
+        "The same proposition was confirmed by a distinct interaction; persistence "
+        "may increment its count."
+        if exact_match
+        else "A high-confidence, source-supported paraphrase in the same context "
+        "confirmed the existing proposition; persistence may increment its count."
+    )
     return _action(
         IngestDecisionType.REINFORCED,
-        "same_proposition_new_interaction",
-        (
-            "The same proposition was confirmed by a distinct interaction; persistence "
-            "may increment its count."
-        ),
+        reason_code,
+        reason_summary,
         candidate_id=candidate.candidate_id,
         memory_id=existing_memory.id,
         related_memory_id=existing_memory.id,
@@ -646,6 +807,87 @@ def _same_identity(left: CandidateMemory, right: MemoryRecord) -> bool:
         if not left_value or not right_value or left_value != right_value:
             return False
     return True
+
+
+def _canonical_token(token: str) -> str:
+    token = _TOKEN_ALIASES.get(token, token)
+    if token.endswith("ies") and len(token) > 4:
+        return f"{token[:-3]}y"
+    if token.endswith("s") and len(token) > 3:
+        return token[:-1]
+    return token
+
+
+def _key_tokens(value: str) -> set[str]:
+    normalized = normalize_text(value).replace("_", " ").replace("-", " ")
+    return {
+        _canonical_token(token)
+        for token in _WORD_RE.findall(normalized)
+        if token not in _PROPOSITION_STOPWORDS
+    }
+
+
+def _compatible_context_key(left: str | None, right: str | None) -> bool:
+    if not left or not right:
+        return False
+    left_tokens = _key_tokens(left)
+    right_tokens = _key_tokens(right)
+    return bool(left_tokens) and left_tokens == right_tokens
+
+
+def _compatible_attribute_key(left: str | None, right: str | None) -> bool:
+    if not left or not right:
+        return False
+    left_normalized = normalize_text(left)
+    right_normalized = normalize_text(right)
+    if left_normalized == right_normalized:
+        return True
+    shared = _key_tokens(left) & _key_tokens(right)
+    return bool(shared - _GENERIC_KEY_TOKENS)
+
+
+def _same_reinforcement_identity(left: CandidateMemory, right: MemoryRecord) -> bool:
+    if left.memory_type is not right.memory_type:
+        return False
+    if normalize_text(left.subject or "") != normalize_text(right.subject or ""):
+        return False
+    return _compatible_context_key(
+        left.context_key, right.context_key
+    ) and _compatible_attribute_key(left.attribute_key, right.attribute_key)
+
+
+def _semantic_proposition_tokens(value: str, *, subject: str | None) -> set[str]:
+    subject_tokens = _key_tokens(subject) if subject else set()
+    tokens = {
+        _canonical_token(token)
+        for token in _WORD_RE.findall(normalize_text(value))
+        if token not in _PROPOSITION_STOPWORDS
+    }
+    return tokens - subject_tokens - _PROPOSITION_PREDICATES
+
+
+def _same_semantic_proposition(candidate: CandidateMemory, existing: MemoryRecord) -> bool:
+    candidate_tokens = _semantic_proposition_tokens(
+        candidate.content, subject=candidate.subject
+    )
+    existing_tokens = _semantic_proposition_tokens(
+        existing.content, subject=existing.subject
+    )
+    if not candidate_tokens or not existing_tokens:
+        return False
+    shared = candidate_tokens & existing_tokens
+    coverage = len(shared) / min(len(candidate_tokens), len(existing_tokens))
+    if len(shared) >= 2 and coverage >= 0.60:
+        return True
+    return len(shared) == 1 and len(candidate_tokens) == len(existing_tokens) == 1
+
+
+def _has_reinforcement_change_language(source_text: str, evidence_excerpt: str) -> bool:
+    text = " ".join((source_text, evidence_excerpt))
+    return bool(
+        _REINFORCEMENT_NEGATION_RE.search(text)
+        or _REINFORCEMENT_REPLACEMENT_RE.search(text)
+    )
 
 
 def _explicit_change(source_text: str, evidence_excerpt: str) -> bool:
@@ -787,6 +1029,7 @@ def validate_relation(
             prior_interaction_ids=prior_interaction_ids,
             used_candidate_ids=used_candidate_ids,
             relation_confidence=relation_confidence,
+            source_text=source_text,
         )
 
     if relation is MemoryRelation.DISPUTE:
@@ -868,6 +1111,7 @@ def validate_relation(
             prior_interaction_ids=prior_interaction_ids,
             used_candidate_ids=used_candidate_ids,
             relation_confidence=relation_confidence,
+            source_text=source_text,
         )
     if not _explicit_change(source_text, assessment.evidence_excerpt):
         return _dispute(
@@ -1198,6 +1442,7 @@ __all__ = [
     "MIN_CONFIDENCE",
     "MIN_IMPORTANCE",
     "PolicyAction",
+    "REINFORCE_RELATION_CONFIDENCE",
     "SCORE_WEIGHTS",
     "SUPERSEDE_RELATION_CONFIDENCE",
     "ScoredMemory",

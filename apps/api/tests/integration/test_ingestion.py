@@ -10,15 +10,25 @@ from uuid import uuid4
 import pytest
 from alembic import command
 from alembic.config import Config
-from sqlalchemy import delete, text
+from sqlalchemy import delete, select, text
 from sqlalchemy.exc import OperationalError
 
 from memoryos.config import Settings
-from memoryos.contracts.ingestion import IngestInteractionRequest
+from memoryos.contracts.ingestion import (
+    CandidateMemory,
+    IngestInteractionRequest,
+    RelationAssessment,
+)
 from memoryos.db.models import Memory, Scope
 from memoryos.db.repositories import MemoryRepository
 from memoryos.db.session import create_db_engine, create_session_factory
-from memoryos.domain.enums import ExecutionMode, IngestDecisionType, MemoryStatus
+from memoryos.domain.enums import (
+    ExecutionMode,
+    IngestDecisionType,
+    MemoryRelation,
+    MemoryStatus,
+    MemoryType,
+)
 from memoryos.providers.errors import ProviderUnavailable
 from memoryos.seed.catalog import DEMO_MODEL, fixture_embeddings
 from memoryos.services.errors import ServiceError
@@ -155,6 +165,112 @@ def test_remember_reinforce_supersede_dispute_is_atomic_and_scoped(isolated_scop
         )
         assert sum(row.status is MemoryStatus.ACTIVE for row in rows) == 0
         assert sum(row.status is MemoryStatus.DISPUTED for row in rows) == 2
+
+
+def test_live_style_paraphrase_reinforces_existing_memory_without_duplicate(isolated_scope) -> None:
+    factory, scope_id = isolated_scope
+    settings = _settings()
+    source = (
+        "I still strongly prefer concise explanations when learning algorithms. "
+        "Please keep explanations short and focused."
+    )
+    existing_id = uuid4()
+    with factory.begin() as session:
+        repo = MemoryRepository(session, settings)
+        repo.insert_memory(
+            scope_id=scope_id,
+            memory_id=existing_id,
+            content="The user prefers concise explanations when learning algorithms.",
+            memory_type=MemoryType.PREFERENCE,
+            subject="user",
+            context_key="learning_algorithms",
+            attribute_key="explanation_length",
+            importance=0.8,
+            confidence=0.99,
+            embedding=fixture_embeddings(
+                ["Atlas prefers concise answers with Python examples."]
+            )[0],
+            embedding_model=DEMO_MODEL,
+            effective_at=NOW - timedelta(days=1),
+            last_confirmed_at=NOW - timedelta(days=1),
+        )
+
+    class StubEmbeddingProvider:
+        model_name = DEMO_MODEL
+        dimensions = 1536
+
+        def embed(self, texts):
+            vector = fixture_embeddings(
+                ["Atlas prefers concise answers with Python examples."]
+            )[0]
+            return [list(vector) for _ in texts]
+
+    class StubStructuredProvider:
+        model_name = "test-structured"
+
+        def extract_candidates(self, *, text):
+            return [
+                CandidateMemory(
+                    candidate_id="reported-paraphrase",
+                    content=(
+                        "The user strongly prefers short, focused explanations "
+                        "when learning algorithms."
+                    ),
+                    memory_type=MemoryType.PREFERENCE,
+                    subject="user",
+                    context_key="learning_algorithms",
+                    attribute_key="explanation_style",
+                    importance=0.88,
+                    confidence=0.99,
+                    evidence_excerpt=source,
+                )
+            ]
+
+        def assess_relations(self, *, candidates, related_memories, source_text=None):
+            target = next(memory for memory in related_memories if memory.id == existing_id)
+            return [
+                RelationAssessment(
+                    candidate_id=candidates[0].candidate_id,
+                    related_memory_id=target.id,
+                    relation=MemoryRelation.REINFORCE,
+                    confidence=0.95,
+                    evidence_excerpt=source_text or source,
+                    reason_code="same_context_confirmation",
+                    reason_summary="The source confirms the existing preference.",
+                )
+            ]
+
+    service = MemoryIngestionService(
+        settings,
+        factory,
+        embedding_factory=lambda mode, current_settings: StubEmbeddingProvider(),
+        structured_factory=lambda mode, current_settings: StubStructuredProvider(),
+    )
+    response = service.ingest(
+        IngestInteractionRequest(
+            scope_id=scope_id,
+            text=source,
+            occurred_at=NOW,
+            idempotency_key="reported-paraphrase-reinforcement",
+            mode=ExecutionMode.DEMO,
+        )
+    )
+
+    assert response.decisions[0].decision_type is IngestDecisionType.REINFORCED
+    assert response.decisions[0].memory_id == existing_id
+    assert response.memory_ids == [existing_id]
+    with factory() as session:
+        repo = MemoryRepository(session, settings)
+        reinforced = repo.get_by_id(scope_id, existing_id)
+        history = repo.get_history(scope_id=scope_id, memory_id=existing_id)
+        rows = list(session.scalars(select(Memory).where(Memory.scope_id == scope_id)))
+        assert reinforced is not None
+        assert reinforced.reinforcement_count == 1
+        assert reinforced.last_confirmed_at == NOW
+        assert history is not None
+        assert history.events[-1].event_type.value == "reinforced"
+        assert history.events[-1].evidence_excerpt == source
+        assert len(rows) == 2
 
 
 def test_replay_and_preview_do_not_write_again(isolated_scope) -> None:

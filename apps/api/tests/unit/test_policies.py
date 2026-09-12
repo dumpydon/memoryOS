@@ -275,41 +275,206 @@ def test_reinforcement_does_not_reduce_legacy_confidence_above_cap() -> None:
     assert reinforced_confidence(0.8, 1.0) <= MAX_REINFORCED_CONFIDENCE
 
 
-def test_high_confidence_relation_can_reinforce_same_context_paraphrase() -> None:
+def test_high_confidence_relation_can_reinforce_semantic_paraphrase() -> None:
     result = validate_relation(
         assessment(
             relation=MemoryRelation.REINFORCE,
             confidence=0.9,
-            evidence_excerpt="Alex likes coffee",
+            evidence_excerpt="Alex likes tea",
         ),
         {
             "c1": candidate(
-                content="Alex likes coffee",
-                evidence_excerpt="Alex likes coffee",
+                content="Alex likes tea",
+                evidence_excerpt="Alex likes tea",
             )
         },
         {MEMORY_ID: memory()},
-        "Alex likes coffee",
+        "Alex likes tea",
         interaction_id=INTERACTION_ID,
     )
     low_confidence = validate_relation(
         assessment(
             relation=MemoryRelation.REINFORCE,
             confidence=0.84,
-            evidence_excerpt="Alex likes coffee",
+            evidence_excerpt="Alex likes tea",
         ),
         {
             "c1": candidate(
-                content="Alex likes coffee",
-                evidence_excerpt="Alex likes coffee",
+                content="Alex likes tea",
+                evidence_excerpt="Alex likes tea",
             )
         },
         {MEMORY_ID: memory()},
-        "Alex likes coffee",
+        "Alex likes tea",
         interaction_id=UUID("00000000-0000-0000-0000-000000000021"),
     )
     assert result.decision_type is IngestDecisionType.REINFORCED
     assert low_confidence.decision_type is IngestDecisionType.REJECTED
+
+
+def test_reported_learning_paraphrase_allows_compatible_attribute_key() -> None:
+    existing = memory(
+        content="The user prefers concise explanations when learning algorithms.",
+        subject="user",
+        context_key="learning_algorithms",
+        attribute_key="explanation_length",
+        confidence=0.99,
+    )
+    source = (
+        "I still strongly prefer concise explanations when learning algorithms. "
+        "Please keep explanations short and focused."
+    )
+    incoming = candidate(
+        content="The user strongly prefers short, focused explanations when learning algorithms.",
+        subject="user",
+        context_key="learning_algorithms",
+        attribute_key="explanation_style",
+        evidence_excerpt=source,
+        confidence=0.99,
+    )
+    result = validate_relation(
+        assessment(
+            relation=MemoryRelation.REINFORCE,
+            confidence=0.95,
+            evidence_excerpt=source,
+        ),
+        {incoming.candidate_id: incoming},
+        {MEMORY_ID: existing},
+        source,
+        interaction_id=INTERACTION_ID,
+    )
+    assert result.decision_type is IngestDecisionType.REINFORCED
+    assert result.reason_code == "same_context_paraphrase_new_interaction"
+    assert result.memory_id == MEMORY_ID
+
+
+def test_python_example_paraphrase_allows_compatible_attribute_key() -> None:
+    existing = memory(
+        content="Alex prefers Python examples.",
+        context_key="interviews",
+        attribute_key="example_language",
+    )
+    source = "Please continue showing code examples in Python."
+    incoming = candidate(
+        content="Alex wants code examples in Python.",
+        context_key="interviews",
+        attribute_key="example_format",
+        evidence_excerpt=source,
+    )
+    result = validate_relation(
+        assessment(
+            relation=MemoryRelation.REINFORCE,
+            confidence=0.91,
+            evidence_excerpt=source,
+        ),
+        {incoming.candidate_id: incoming},
+        {MEMORY_ID: existing},
+        source,
+        interaction_id=INTERACTION_ID,
+    )
+    assert result.decision_type is IngestDecisionType.REINFORCED
+
+
+def test_reinforcement_rejects_different_context_even_when_values_overlap() -> None:
+    existing = memory(
+        content="Alex prefers Python for interviews.",
+        context_key="interviews",
+        attribute_key="example_language",
+    )
+    source = "Alex uses TypeScript at work."
+    incoming = candidate(
+        content="Alex uses TypeScript at work.",
+        context_key="work",
+        attribute_key="example_language",
+        evidence_excerpt=source,
+    )
+    result = validate_relation(
+        assessment(
+            relation=MemoryRelation.REINFORCE,
+            confidence=0.99,
+            evidence_excerpt=source,
+        ),
+        {incoming.candidate_id: incoming},
+        {MEMORY_ID: existing},
+        source,
+        interaction_id=INTERACTION_ID,
+    )
+    assert result.decision_type is IngestDecisionType.REJECTED
+    assert result.reason_code == "reinforcement_identity_mismatch"
+
+
+def test_reinforcement_rejects_negation_and_replacement_language() -> None:
+    existing = memory(
+        content="Alex prefers concise answers.",
+        context_key="responses",
+        attribute_key="answer_length",
+    )
+    replacement_source = "From now on use detailed answers instead of concise ones."
+    replacement = candidate(
+        content="Alex prefers detailed answers.",
+        context_key="responses",
+        attribute_key="answer_length",
+        evidence_excerpt=replacement_source,
+    )
+    replacement_result = validate_relation(
+        assessment(
+            relation=MemoryRelation.REINFORCE,
+            confidence=0.99,
+            evidence_excerpt=replacement_source,
+        ),
+        {replacement.candidate_id: replacement},
+        {MEMORY_ID: existing},
+        replacement_source,
+        interaction_id=INTERACTION_ID,
+    )
+    negation_source = "Alex does not prefer concise answers."
+    negation = candidate(
+        content="Alex does not prefer concise answers.",
+        context_key="responses",
+        attribute_key="answer_length",
+        evidence_excerpt=negation_source,
+    )
+    negation_result = validate_relation(
+        assessment(
+            relation=MemoryRelation.REINFORCE,
+            confidence=0.99,
+            evidence_excerpt=negation_source,
+        ),
+        {negation.candidate_id: negation},
+        {MEMORY_ID: existing},
+        negation_source,
+        interaction_id=UUID("00000000-0000-0000-0000-000000000021"),
+    )
+    assert replacement_result.reason_code == "reinforcement_change_language"
+    assert negation_result.reason_code == "reinforcement_change_language"
+
+
+def test_reinforcement_rejects_weak_semantic_overlap() -> None:
+    existing = memory(
+        content="Alex prefers short answers.",
+        context_key="interviews",
+        attribute_key="answer_length",
+    )
+    source = "Alex's interview is short tomorrow."
+    incoming = candidate(
+        content="Alex's interview is short tomorrow.",
+        context_key="interviews",
+        attribute_key="answer_length",
+        evidence_excerpt=source,
+    )
+    result = validate_relation(
+        assessment(
+            relation=MemoryRelation.REINFORCE,
+            confidence=0.99,
+            evidence_excerpt=source,
+        ),
+        {incoming.candidate_id: incoming},
+        {MEMORY_ID: existing},
+        source,
+        interaction_id=INTERACTION_ID,
+    )
+    assert result.decision_type is IngestDecisionType.REJECTED
+    assert result.reason_code == "semantic_proposition_mismatch"
 
 
 def test_relation_rejects_spoofed_ids_and_evidence() -> None:

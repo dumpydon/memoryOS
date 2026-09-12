@@ -656,37 +656,39 @@ function feedbackForResult(
   ).length;
   if (created > 0) {
     return {
-      title: "Memory interaction committed",
-      message: `${created} memor${created === 1 ? "y" : "ies"} created. The approved decision is now available in Memory Explorer.`,
+      title: `${created} memor${created === 1 ? "y" : "ies"} added`,
+      message:
+        "The interaction was recorded and the approved decision is now available in Memory Explorer.",
       tone: "success",
     };
   }
   if (reinforced > 0) {
     return {
-      title: "Memory interaction committed",
-      message: `${reinforced} existing memor${reinforced === 1 ? "y was" : "ies were"} reinforced.`,
+      title: `${reinforced} memor${reinforced === 1 ? "y" : "ies"} reinforced`,
+      message: `The interaction was recorded and ${reinforced === 1 ? "the existing memory was" : "the existing memories were"} confirmed.`,
       tone: "success",
     };
   }
   if (superseded > 0) {
     return {
-      title: "Memory interaction committed",
+      title: "Memory updated",
       message:
-        "A newer memory version replaced the older one, with the history preserved.",
+        "The interaction was recorded and a newer memory version replaced the older one, with history preserved.",
       tone: "success",
     };
   }
   if (disputed > 0) {
     return {
-      title: "Interaction processed",
+      title: "Review required",
       message:
-        "The conflict was sent to Memory Review because the evidence was ambiguous.",
+        "The interaction was recorded, but the conflict was sent to Memory Review because the evidence was ambiguous.",
       tone: "success",
     };
   }
   return {
-    title: "Interaction processed",
-    message: "No memory changes were necessary.",
+    title: "No memory change",
+    message:
+      "The interaction was recorded, but policy safely left long-term memory unchanged.",
     tone: "info",
   };
 }
@@ -759,6 +761,9 @@ function IngestionResult({
   const summary = humanSummaryForResult(result);
   const hasStoredMemory =
     result.status === "completed" && result.memory_ids.length > 0;
+  const needsReview =
+    result.status === "completed" &&
+    result.decisions.some((decision) => decision.decision_type === "disputed");
   return (
     <div className="trace-stack result-enter">
       <div className="panel result-summary">
@@ -778,6 +783,11 @@ function IngestionResult({
           {hasStoredMemory ? (
             <Link className="text-link" href="/memories">
               View in Memory Explorer <ArrowRight size={14} />
+            </Link>
+          ) : null}
+          {needsReview ? (
+            <Link className="text-link" href="/review">
+              Open Memory Review <ArrowRight size={14} />
             </Link>
           ) : null}
           <button
