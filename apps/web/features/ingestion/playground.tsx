@@ -85,7 +85,10 @@ export function IngestionPlayground() {
     [],
   );
 
-  function showFeedback(next: Feedback, duration = 5_500) {
+  function showFeedback(
+    next: Feedback,
+    duration = next.tone === "error" ? 5_500 : 3_600,
+  ) {
     setFeedback(next);
     if (feedbackTimer.current !== null) {
       window.clearTimeout(feedbackTimer.current);
@@ -520,8 +523,12 @@ function ProcessingCard({ preview }: { preview: boolean }) {
   return (
     <div className="panel processing-card" role="status" aria-busy="true">
       <div className="processing-card-header">
-        <div className="processing-icon">
-          <LoaderCircle className="spin" size={18} aria-hidden="true" />
+        <div className="processing-icon processing-glyph">
+          <LoaderCircle
+            className="processing-glyph-spinner"
+            size={17}
+            aria-hidden="true"
+          />
         </div>
         <div>
           <span className="eyebrow">
@@ -764,20 +771,36 @@ function IngestionResult({
   const needsReview =
     result.status === "completed" &&
     result.decisions.some((decision) => decision.decision_type === "disputed");
+  const completionTone = resultCompletionTone(result);
   return (
-    <div className="trace-stack result-enter">
+    <div className={`trace-stack result-enter result-tone-${completionTone}`}>
       <div className="panel result-summary">
         <div className="result-summary-top">
-          <div>
-            <span className="eyebrow">
-              {result.status === "preview"
-                ? "Preview result"
-                : "Committed result"}
-            </span>
-            <h2>{summary.headline}</h2>
-            <p className="result-summary-detail">{summary.detail}</p>
+          <div className="result-summary-heading">
+            <ResultStatusGlyph tone={completionTone} />
+            <div>
+              <span className="eyebrow">
+                {result.status === "preview"
+                  ? "Preview result"
+                  : "Committed result"}
+              </span>
+              <h2>{summary.headline}</h2>
+              <p className="result-summary-detail">{summary.detail}</p>
+            </div>
           </div>
-          <span className="status-badge active">{result.mode}</span>
+          <span
+            className={`status-badge ${
+              completionTone === "success"
+                ? "active"
+                : completionTone === "review"
+                  ? "disputed"
+                  : completionTone === "preview"
+                    ? "preview"
+                    : ""
+            }`}
+          >
+            {result.mode}
+          </span>
         </div>
         <div className="result-summary-actions">
           {hasStoredMemory ? (
@@ -898,6 +921,45 @@ function IngestionResult({
         </div>
       </div>
     </div>
+  );
+}
+
+function resultCompletionTone(
+  result: IngestInteractionResponse,
+): "success" | "preview" | "review" | "neutral" {
+  if (result.status === "preview") return "preview";
+  if (
+    result.decisions.some((decision) =>
+      ["created", "reinforced", "superseded"].includes(decision.decision_type),
+    )
+  ) {
+    return "success";
+  }
+  if (
+    result.decisions.some((decision) => decision.decision_type === "disputed")
+  ) {
+    return "review";
+  }
+  return "neutral";
+}
+
+function ResultStatusGlyph({
+  tone,
+}: {
+  tone: "success" | "preview" | "review" | "neutral";
+}) {
+  const Icon =
+    tone === "success"
+      ? Check
+      : tone === "review"
+        ? ShieldAlert
+        : tone === "preview"
+          ? Info
+          : Minus;
+  return (
+    <span className={`result-status-glyph ${tone}`} aria-hidden="true">
+      <Icon size={16} strokeWidth={2.1} />
+    </span>
   );
 }
 
