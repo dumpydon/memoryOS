@@ -1,6 +1,7 @@
 import { QueryProvider } from "@/components/query-provider";
 import { SidebarNav } from "@/components/sidebar-nav";
 import { DotMatrixWordmark } from "@/components/dot-matrix-wordmark";
+import { IngestionSessionProvider } from "@/components/ingestion-session-context";
 import { ThemeProvider } from "@/components/theme-provider";
 import { WorkspaceProvider } from "@/components/workspace-context";
 import { WorkspaceMain } from "@/components/workspace-main";
@@ -91,7 +92,9 @@ export function AppShell({ children }: { children: React.ReactNode }) {
                   <SidebarNav />
                 </aside>
 
-                <WorkspaceMain>{children}</WorkspaceMain>
+                <IngestionSessionProvider>
+                  <WorkspaceMain>{children}</WorkspaceMain>
+                </IngestionSessionProvider>
               </div>
             </div>
             <div className="footer-curtain-spacer" aria-hidden="true" />

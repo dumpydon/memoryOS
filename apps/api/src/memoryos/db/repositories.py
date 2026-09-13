@@ -680,6 +680,7 @@ class MemoryRepository:
             memory_id=memory_id,
             interaction_id=interaction_id,
             event_type=MemoryEventType.REINFORCED,
+            related_memory_id=memory_id,
             evidence_excerpt=evidence_excerpt,
             reason_code=reason_code,
             reason_summary=reason_summary,
@@ -720,7 +721,8 @@ class MemoryRepository:
         event_id: UUID | None = None,
         created_at: datetime | None = None,
     ) -> MemoryEventContract:
-        if event_type == MemoryEventType.REINFORCED and interaction_id is not None:
+        normalized_event_type = _enum_value(event_type, MemoryEventType)
+        if normalized_event_type is MemoryEventType.REINFORCED and interaction_id is not None:
             existing = self.session.scalar(
                 select(MemoryEvent).where(
                     MemoryEvent.scope_id == scope_id,
@@ -736,8 +738,12 @@ class MemoryRepository:
             scope_id=scope_id,
             memory_id=memory_id,
             interaction_id=interaction_id,
-            event_type=_enum_value(event_type, MemoryEventType),
-            related_memory_id=related_memory_id,
+            event_type=normalized_event_type,
+            related_memory_id=(
+                memory_id
+                if normalized_event_type is MemoryEventType.REINFORCED and related_memory_id is None
+                else related_memory_id
+            ),
             evidence_excerpt=evidence_excerpt,
             reason_code=reason_code,
             reason_summary=reason_summary,

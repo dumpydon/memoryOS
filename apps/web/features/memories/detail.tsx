@@ -211,7 +211,10 @@ function MemoryDetailContent({
             </div>
           </div>
           <div className="detail-metrics">
-            <DetailMetric label="Importance" value={displayMemory.importance} />
+            <DetailMetric
+              label="Memory importance"
+              value={displayMemory.importance}
+            />
             <DetailMetric label="Confidence" value={displayMemory.confidence} />
             <div className="detail-metric">
               <span>Reinforcements</span>
@@ -326,7 +329,9 @@ function MemoryDetailContent({
             <span className="eyebrow">Audit trail</span>
             <h2>What happened over time</h2>
           </div>
-          <span className="timeline-count">{history.events.length} events</span>
+          <span className="timeline-count">
+            {history.events.length} events · oldest first
+          </span>
         </div>
         {history.events.length ? (
           <div className="timeline-list">
@@ -371,18 +376,88 @@ function MetaItem({ label, value }: { label: string; value: string }) {
   );
 }
 function TimelineRow({ event }: { event: MemoryEvent }) {
+  const isReinforcement = event.event_type === "reinforced";
+  const beforeCount = snapshotNumber(event.before, "reinforcement_count");
+  const afterCount = snapshotNumber(event.after, "reinforcement_count");
+  const beforeConfidence = snapshotNumber(event.before, "confidence");
+  const afterConfidence = snapshotNumber(event.after, "confidence");
+  const relationConfidence = snapshotNumber(event.after, "relation_confidence");
+  const eventLabel = event.event_type.replaceAll("_", " ");
   return (
     <div className="timeline-row">
       <span className={`timeline-dot ${event.event_type}`} />
-      <div>
+      <div className="timeline-event-copy">
         <div className="timeline-event-title">
-          <strong>{event.event_type}</strong>
-          <span>{formatDate(event.created_at)}</span>
+          <strong>{eventLabel}</strong>
+          <time dateTime={event.created_at}>
+            {formatDateTime(event.created_at)}
+          </time>
         </div>
-        <p>{event.reason_summary}</p>
+        <p>
+          {isReinforcement
+            ? "Confirmed by another supporting interaction."
+            : event.reason_summary}
+        </p>
         {event.evidence_excerpt ? (
           <blockquote>“{event.evidence_excerpt}”</blockquote>
         ) : null}
+        <details className="timeline-details">
+          <summary>Details</summary>
+          <dl className="timeline-details-grid">
+            <div>
+              <dt>Event ID</dt>
+              <dd>
+                <code title={event.id}>{shortId(event.id)}</code>
+              </dd>
+            </div>
+            <div>
+              <dt>Canonical memory</dt>
+              <dd>
+                <code title={event.memory_id}>{shortId(event.memory_id)}</code>
+              </dd>
+            </div>
+            {event.interaction_id ? (
+              <div>
+                <dt>Source interaction</dt>
+                <dd>
+                  <code title={event.interaction_id}>
+                    {shortId(event.interaction_id)}
+                  </code>
+                </dd>
+              </div>
+            ) : null}
+            <div>
+              <dt>Policy reason</dt>
+              <dd>{event.reason_code}</dd>
+            </div>
+            {beforeCount !== null && afterCount !== null ? (
+              <div>
+                <dt>Reinforcements</dt>
+                <dd>
+                  {beforeCount} → {afterCount}
+                </dd>
+              </div>
+            ) : null}
+            {beforeConfidence !== null && afterConfidence !== null ? (
+              <div>
+                <dt>Confidence</dt>
+                <dd>
+                  {beforeConfidence.toFixed(2)} → {afterConfidence.toFixed(2)}
+                </dd>
+              </div>
+            ) : null}
+            {relationConfidence !== null ? (
+              <div>
+                <dt>Relation confidence</dt>
+                <dd>{relationConfidence.toFixed(2)}</dd>
+              </div>
+            ) : null}
+            <div>
+              <dt>Recorded</dt>
+              <dd>{formatDateTime(event.created_at)}</dd>
+            </div>
+          </dl>
+        </details>
       </div>
     </div>
   );
@@ -393,6 +468,23 @@ function formatDate(value: string) {
     day: "numeric",
     year: "numeric",
   }).format(new Date(value));
+}
+function formatDateTime(value: string) {
+  return new Intl.DateTimeFormat("en", {
+    month: "short",
+    day: "numeric",
+    year: "numeric",
+    hour: "numeric",
+    minute: "2-digit",
+    timeZoneName: "short",
+  }).format(new Date(value));
+}
+function shortId(value: string) {
+  return `${value.slice(0, 8)}…`;
+}
+function snapshotNumber(snapshot: Record<string, unknown> | null, key: string) {
+  const value = snapshot?.[key];
+  return typeof value === "number" && Number.isFinite(value) ? value : null;
 }
 function relativeDays(value: string) {
   const days = Math.round(

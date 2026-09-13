@@ -711,6 +711,9 @@ class MemoryIngestionService:
                                         "confidence": action.confidence,
                                         "reinforcement_count": existing.record.reinforcement_count
                                         + 1,
+                                        "relation_confidence": (
+                                            relation.confidence if relation is not None else None
+                                        ),
                                     },
                                     confirmed_at=confirmed_at,
                                 )

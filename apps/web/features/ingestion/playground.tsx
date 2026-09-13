@@ -36,6 +36,7 @@ import {
   InlineNotice,
   LoadingState,
 } from "@/components/status-state";
+import { useIngestionSession } from "@/components/ingestion-session-context";
 import { TypeBadge } from "@/components/type-badge";
 import { useWorkspace } from "@/components/workspace-context";
 import { ApiClientError } from "@/lib/api/client";
@@ -58,6 +59,18 @@ export function IngestionPlayground() {
   const searchParams = useSearchParams();
   const queryClient = useQueryClient();
   const { scopeId, mode, token, isOwner } = useWorkspace();
+  const {
+    text,
+    result,
+    scenarioId: rememberedScenarioId,
+    idempotencyKey,
+    setText,
+    setIdempotencyKey,
+    setScenarioId,
+    clearResult,
+    complete,
+    reset,
+  } = useIngestionSession();
   const catalog = useQuery({
     queryKey: ["demo-catalog"],
     queryFn: () => getDemoCatalog(token),
@@ -68,13 +81,8 @@ export function IngestionPlayground() {
     queryFn: () => getCapabilities(token),
   });
   const scenarioId = searchParams.get("scenario") || "";
-  const [text, setText] = useState("");
-  const [result, setResult] = useState<IngestInteractionResponse | null>(null);
   const [feedback, setFeedback] = useState<Feedback | null>(null);
   const feedbackTimer = useRef<number | null>(null);
-  const [idempotencyKey, setIdempotencyKey] = useState(
-    () => `memoryos-${Date.now()}`,
-  );
 
   useEffect(
     () => () => {
@@ -103,18 +111,26 @@ export function IngestionPlayground() {
     () => catalog.data?.scenarios || [],
     [catalog.data],
   );
+  const activeScenarioId = scenarioId || rememberedScenarioId || "";
   const selectedScenario = useMemo(
     () =>
-      scenarioId
-        ? scenarios.find((scenario) => scenario.id === scenarioId)
+      activeScenarioId
+        ? scenarios.find((scenario) => scenario.id === activeScenarioId) ||
+          scenarios[0]
         : scenarios[0],
-    [scenarioId, scenarios],
+    [activeScenarioId, scenarios],
   );
   const displayText = mode === "demo" ? selectedScenario?.text || "" : text;
   const liveUnavailable =
     mode === "live" &&
     capabilities.data &&
     !capabilities.data.live_ingestion_available;
+
+  useEffect(() => {
+    if (scenarioId && scenarioId !== rememberedScenarioId) {
+      setScenarioId(scenarioId);
+    }
+  }, [rememberedScenarioId, scenarioId, setScenarioId]);
 
   const ingest = useMutation({
     mutationFn: async ({ preview }: { preview: boolean }) => {
@@ -138,7 +154,7 @@ export function IngestionPlayground() {
       return response;
     },
     onSuccess: (response, variables) => {
-      setResult(response);
+      complete(response, variables.preview ? "preview" : "commit");
       showFeedback(feedbackForResult(response, variables.preview));
     },
     onError: (error, variables) => {
@@ -166,7 +182,8 @@ export function IngestionPlayground() {
   });
 
   function selectScenario(scenario: DemoScenario) {
-    setResult(null);
+    clearResult();
+    setScenarioId(scenario.id);
     setFeedback(null);
     setIdempotencyKey(`memoryos-${scenario.id}-${Date.now()}`);
     router.replace(`/ingestion?scenario=${encodeURIComponent(scenario.id)}`, {
@@ -212,7 +229,7 @@ export function IngestionPlayground() {
             : "Live ingestion is unavailable until OPENAI_API_KEY is configured on the API server."),
         tone: "warning",
       });
-    setResult(null);
+    clearResult();
     ingest.mutate({ preview });
   }
 
@@ -250,15 +267,29 @@ export function IngestionPlayground() {
 
       <div className="playground-layout">
         <section className="panel interaction-editor">
-          <div className="panel-heading">
+          <div className="panel-heading interaction-panel-heading">
             <div>
               <span className="eyebrow">Input</span>
               <h2>Choose an interaction</h2>
             </div>
-            <span className="provider-label">
-              <FlaskConical size={13} />
-              {mode === "demo" ? "fixture mode" : "owner mode"}
-            </span>
+            <div className="interaction-heading-actions">
+              <span className="provider-label">
+                <FlaskConical size={13} />
+                {mode === "demo" ? "fixture mode" : "owner mode"}
+              </span>
+              <button
+                className="result-new-button"
+                type="button"
+                disabled={ingest.isPending}
+                onClick={() => {
+                  reset();
+                  setFeedback(null);
+                }}
+              >
+                <RotateCcw className="result-new-icon" size={15} />
+                <span>New interaction</span>
+              </button>
+            </div>
           </div>
           {mode === "demo" && catalog.isPending ? (
             <LoadingState label="Loading demo scenarios" />
@@ -339,7 +370,7 @@ export function IngestionPlayground() {
           ) : null}
           <div className="editor-actions">
             <button
-              className={`secondary-button${ingest.isPending && ingest.variables?.preview ? " processing" : ""}`}
+              className={`secondary-button ingestion-action-button${ingest.isPending && ingest.variables?.preview ? " processing" : ""}`}
               type="button"
               disabled={ingest.isPending}
               onClick={() => run(true)}
@@ -347,14 +378,14 @@ export function IngestionPlayground() {
               {ingest.isPending && ingest.variables?.preview ? (
                 <LoaderCircle className="spin" size={14} />
               ) : (
-                <Play size={14} />
+                <Play className="ingestion-action-icon" size={14} />
               )}
               {ingest.isPending && ingest.variables?.preview
                 ? "Analyzing…"
                 : "Preview graph"}
             </button>
             <button
-              className={`primary-button${ingest.isPending && !ingest.variables?.preview ? " processing" : ""}`}
+              className={`primary-button ingestion-action-button commit-memory-button${ingest.isPending && !ingest.variables?.preview ? " processing" : ""}`}
               type="button"
               disabled={ingest.isPending || !isOwner}
               onClick={() => run(false)}
@@ -362,7 +393,7 @@ export function IngestionPlayground() {
               {ingest.isPending && !ingest.variables?.preview ? (
                 <LoaderCircle className="spin" size={14} />
               ) : (
-                <Sparkles size={14} />
+                <Sparkles className="ingestion-action-icon" size={14} />
               )}
               {ingest.isPending && !ingest.variables?.preview
                 ? "Committing…"
@@ -401,15 +432,7 @@ export function IngestionPlayground() {
             <ProcessingCard preview={ingest.variables?.preview === true} />
           ) : null}
           {result ? (
-            <IngestionResult
-              result={result}
-              onNewInteraction={() => {
-                setResult(null);
-                setFeedback(null);
-                setText("");
-                setIdempotencyKey(`memoryos-${Date.now()}`);
-              }}
-            />
+            <IngestionResult result={result} />
           ) : (
             <div
               className={`panel trace-empty${ingest.isPending ? " is-hidden" : ""}`}
@@ -523,12 +546,30 @@ function ProcessingCard({ preview }: { preview: boolean }) {
   return (
     <div className="panel processing-card" role="status" aria-busy="true">
       <div className="processing-card-header">
-        <div className="processing-icon processing-glyph">
-          <LoaderCircle
-            className="processing-glyph-spinner"
-            size={17}
-            aria-hidden="true"
-          />
+        <div className="processing-orbit" aria-hidden="true">
+          <svg viewBox="0 0 40 40">
+            <circle
+              className="processing-orbit-track"
+              cx="20"
+              cy="20"
+              r="15.5"
+              pathLength="100"
+            />
+            <circle
+              className="processing-orbit-trail"
+              cx="20"
+              cy="20"
+              r="15.5"
+              pathLength="100"
+            />
+            <circle
+              className="processing-orbit-lead"
+              cx="20"
+              cy="20"
+              r="15.5"
+              pathLength="100"
+            />
+          </svg>
         </div>
         <div>
           <span className="eyebrow">
@@ -557,9 +598,16 @@ function ProcessingCard({ preview }: { preview: boolean }) {
       >
         {processingStages.map((stage, index) => {
           const Icon = stage.icon;
+          const stageState =
+            index === activeStep
+              ? " current"
+              : index < activeStep
+                ? " completed"
+                : "";
           return (
             <li
-              className={`processing-stage${index === activeStep ? " current" : ""}`}
+              className={`processing-stage${stageState}`}
+              aria-current={index === activeStep ? "step" : undefined}
               key={stage.label}
             >
               <div className="processing-stage-marker">
@@ -758,13 +806,7 @@ function humanCommitHeadline(decisionTypes: string[]) {
   return "Interaction processed";
 }
 
-function IngestionResult({
-  result,
-  onNewInteraction,
-}: {
-  result: IngestInteractionResponse;
-  onNewInteraction: () => void;
-}) {
+function IngestionResult({ result }: { result: IngestInteractionResponse }) {
   const summary = humanSummaryForResult(result);
   const hasStoredMemory =
     result.status === "completed" && result.memory_ids.length > 0;
@@ -802,25 +844,20 @@ function IngestionResult({
             {result.mode}
           </span>
         </div>
-        <div className="result-summary-actions">
-          {hasStoredMemory ? (
-            <Link className="text-link" href="/memories">
-              View in Memory Explorer <ArrowRight size={14} />
-            </Link>
-          ) : null}
-          {needsReview ? (
-            <Link className="text-link" href="/review">
-              Open Memory Review <ArrowRight size={14} />
-            </Link>
-          ) : null}
-          <button
-            className="result-new-button"
-            type="button"
-            onClick={onNewInteraction}
-          >
-            <RotateCcw size={13} /> New interaction
-          </button>
-        </div>
+        {hasStoredMemory || needsReview ? (
+          <div className="result-summary-actions">
+            {hasStoredMemory ? (
+              <Link className="text-link" href="/memories">
+                View in Memory Explorer <ArrowRight size={14} />
+              </Link>
+            ) : null}
+            {needsReview ? (
+              <Link className="text-link" href="/review">
+                Open Memory Review <ArrowRight size={14} />
+              </Link>
+            ) : null}
+          </div>
+        ) : null}
         {result.warnings.map((warning) => (
           <div className="result-warning" key={warning}>
             <ShieldAlert size={14} />
@@ -849,7 +886,8 @@ function IngestionResult({
                 <p>“{candidate.evidence_excerpt}”</p>
                 <div className="candidate-scores">
                   <span>
-                    importance <b>{candidate.importance.toFixed(2)}</b>
+                    extracted importance{" "}
+                    <b>{candidate.importance.toFixed(2)}</b>
                   </span>
                   <span>
                     {candidate.worth_remembering
