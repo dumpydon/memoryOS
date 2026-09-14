@@ -32,7 +32,7 @@ export default function OverviewPage() {
   });
 
   return (
-    <div className="page-wrap">
+    <div className="page-wrap overview-page">
       <header className="page-header">
         <div>
           <div className="breadcrumb">
@@ -51,7 +51,10 @@ export default function OverviewPage() {
             <span className="status-dot" />
             {mode === "demo" ? "Demo mode" : "Live scope"}
           </span>
-          <Link className="primary-button" href="/ingestion">
+          <Link
+            className="primary-button overview-action overview-primary-action"
+            href="/ingestion"
+          >
             <Sparkles size={15} />
             Ingest interaction
           </Link>
@@ -91,6 +94,19 @@ function OverviewContent({
     },
     { value: 0, parts: [] },
   ).parts;
+  const segments = typeOrder.reduce<
+    Array<{
+      type: MemoryType;
+      start: number;
+      share: number;
+    }>
+  >((items, type) => {
+    const count = counts.get(type) || 0;
+    const share = total ? (count / total) * 100 : 0;
+    const start = items.reduce((sum, item) => sum + item.share, 0);
+    items.push({ type, start, share });
+    return items;
+  }, []);
 
   return (
     <>
@@ -132,7 +148,10 @@ function OverviewContent({
               <span className="eyebrow">Memory composition</span>
               <h2>What is in the system</h2>
             </div>
-            <Link className="text-link" href="/memories">
+            <Link
+              className="text-link overview-action overview-inline-action"
+              href="/memories"
+            >
               Explore <ArrowRight size={14} />
             </Link>
           </div>
@@ -143,6 +162,37 @@ function OverviewContent({
                 style={{ background: `conic-gradient(${stops.join(", ")})` }}
                 aria-label={`${total} memories across four types`}
               >
+                <svg
+                  className="donut-segments"
+                  viewBox="0 0 100 100"
+                  aria-hidden="true"
+                >
+                  {segments.map((segment) => (
+                    <circle
+                      className={`donut-segment ${typeTone(segment.type)}`}
+                      cx="50"
+                      cy="50"
+                      r="40.5"
+                      pathLength="100"
+                      strokeDasharray={`${Math.max(segment.share - 0.7, 0)} ${100 - Math.max(segment.share - 0.7, 0)}`}
+                      strokeDashoffset={-(segment.start + 0.35)}
+                      key={segment.type}
+                    />
+                  ))}
+                  {segments.map((segment) => (
+                    <circle
+                      className={`donut-segment-streak ${typeTone(segment.type)}`}
+                      cx="50"
+                      cy="50"
+                      r="40.5"
+                      pathLength="100"
+                      strokeDasharray="2.8 97.2"
+                      strokeDashoffset={-(segment.start + segment.share * 0.2)}
+                      key={`${segment.type}-streak`}
+                    />
+                  ))}
+                </svg>
+                <span className="donut-shine" aria-hidden="true" />
                 <div className="donut-center">
                   <strong>{total}</strong>
                   <span>tracked</span>
@@ -178,7 +228,10 @@ function OverviewContent({
               <span className="eyebrow">Recent activity</span>
               <h2>Memory changes</h2>
             </div>
-            <Link className="text-link" href="/memories">
+            <Link
+              className="text-link overview-action overview-inline-action"
+              href="/memories"
+            >
               View history <ArrowRight size={14} />
             </Link>
           </div>
@@ -207,7 +260,10 @@ function OverviewContent({
             over a near-duplicate.
           </p>
         </div>
-        <Link className="secondary-button" href="/recall">
+        <Link
+          className="secondary-button overview-action overview-secondary-action"
+          href="/recall"
+        >
           Open lab <ArrowRight size={14} />
         </Link>
       </section>
@@ -248,9 +304,10 @@ function LegendRow({
   count: string;
   percent: string;
 }) {
+  const tone = typeTone(color);
   return (
-    <div className="legend-row">
-      <span className={`legend-dot ${typeTone(color)}`} />
+    <div className={`legend-row ${tone}`}>
+      <span className={`legend-dot ${tone}`} />
       <span>{label}</span>
       <strong>{count}</strong>
       <small>{percent}</small>
