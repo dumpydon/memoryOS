@@ -23,7 +23,7 @@ if TYPE_CHECKING:
     from memoryos.contracts.memory import MemoryRecord
     from memoryos.contracts.recall import RecallScoreBreakdown
 
-MEMORYOS_POLICY_VERSION: Final[str] = "memoryos-v2"
+MEMORYOS_POLICY_VERSION: Final[str] = "memoryos-v5"
 SCORE_WEIGHTS: Final[dict[str, float]] = {
     "similarity": 0.55,
     "importance": 0.15,
@@ -38,11 +38,11 @@ TYPE_HALF_LIVES_DAYS: Final[dict[MemoryType, int]] = {
     MemoryType.PROCEDURAL: 180,
 }
 
-MIN_IMPORTANCE: Final[float] = 0.30
-MIN_CONFIDENCE: Final[float] = 0.60
+MIN_IMPORTANCE: Final[float] = 0.40
+MIN_CONFIDENCE: Final[float] = 0.80
 MAX_REINFORCED_CONFIDENCE: Final[float] = 0.95
 REINFORCE_RELATION_CONFIDENCE: Final[float] = 0.85
-SUPERSEDE_RELATION_CONFIDENCE: Final[float] = 0.85
+SUPERSEDE_RELATION_CONFIDENCE: Final[float] = 0.90
 DEFAULT_MIN_SIMILARITY: Final[float] = 0.25
 
 _FILLER_RE = re.compile(
@@ -63,9 +63,15 @@ _SECRET_ASSIGNMENT_RE = re.compile(
     re.IGNORECASE,
 )
 _EXPLICIT_CHANGE_RE = re.compile(
-    r"\b(?:now|currently|from\s+now\s+on|no\s+longer|anymore|instead|"
+    r"\b(?:from\s+now\s+on|no\s+longer|instead|"
     r"changed?|updated?|correction|correct(?:ion)?|switch(?:ed)?|"
     r"replace(?:d)?|rather\s+than)\b",
+    re.IGNORECASE,
+)
+_UNCERTAIN_CHANGE_RE = re.compile(
+    r"\b(?:if|might|maybe|perhaps|could|would|considering|"
+    r"didn't|did\s+not|haven't|have\s+not|"
+    r"not\s+(?:switch(?:ed|ing)?|chang(?:e|ed|ing)|replac(?:e|ed|ing)))\b",
     re.IGNORECASE,
 )
 _REINFORCEMENT_NEGATION_RE = re.compile(
@@ -149,6 +155,7 @@ _PROPOSITION_PREDICATES: Final[frozenset[str]] = frozenset(
     }
 )
 _TOKEN_ALIASES: Final[dict[str, str]] = {
+    "dsa": "algorithm",
     "brief": "concise",
     "short": "concise",
     "succinct": "concise",
@@ -212,6 +219,9 @@ class PolicyAction:
     memory_id: UUID | None = None
     related_memory_id: UUID | None = None
     confidence: float | None = None
+    source_memory_ids: tuple[UUID, ...] = ()
+    consolidation_note: str | None = None
+    canonical_content: str | None = None
 
     @property
     def accepted(self) -> bool:
@@ -219,6 +229,7 @@ class PolicyAction:
 
         return self.decision_type in {
             IngestDecisionType.CREATED,
+            IngestDecisionType.CONSOLIDATED,
             IngestDecisionType.REINFORCED,
             IngestDecisionType.SUPERSEDED,
             IngestDecisionType.DISPUTED,
@@ -237,6 +248,9 @@ class PolicyAction:
             reason_code=self.reason_code,
             reason_summary=self.reason_summary,
             confidence=self.confidence,
+            source_memory_ids=list(self.source_memory_ids),
+            consolidation_note=self.consolidation_note,
+            canonical_content=self.canonical_content,
         )
 
 
@@ -265,6 +279,7 @@ class CandidateBatchValidation:
             for result in self.validations
             if result.accepted and result.candidate is not None
         )
+
 
 @dataclass(frozen=True, slots=True)
 class DeduplicationResult:
@@ -407,6 +422,8 @@ def _skip(
 
 
 def _validate_candidate_shape(candidate: CandidateMemory) -> str | None:
+    from memoryos.contracts.ingestion import AdmissionSignals
+
     if not isinstance(candidate.candidate_id, str) or not candidate.candidate_id.strip():
         return "candidate_id must contain text"
     if not isinstance(candidate.content, str) or not normalize_text(candidate.content):
@@ -418,6 +435,13 @@ def _validate_candidate_shape(candidate: CandidateMemory) -> str | None:
         _unit_interval(candidate.confidence, field_name="confidence")
     except ValueError as exc:
         return str(exc)
+    if candidate.admission is not None:
+        if not isinstance(candidate.admission, AdmissionSignals):
+            return "admission signals are not a supported structured value"
+        try:
+            AdmissionSignals.model_validate(candidate.admission.model_dump())
+        except ValueError:
+            return "admission signals contain unsupported values"
     for name in ("effective_at", "expires_at"):
         value = getattr(candidate, name)
         if value is not None:
@@ -492,24 +516,13 @@ def validate_candidate(
             candidate,
         )
 
-    if not candidate.worth_remembering:
-        return CandidateValidation(
-            _skip(
-                "candidate_declined",
-                candidate.skip_reason or "Candidate was marked not worth remembering.",
-                candidate_id=candidate_id,
-                confidence=float(candidate.confidence),
-            ),
-            candidate,
-        )
-
     # The evidence guard is deliberately checked before these filters. A
     # model cannot cause a source-free filler/secret skip using invented text.
     if _is_filler(candidate.content) or _is_filler(candidate.evidence_excerpt):
         return CandidateValidation(
             _skip(
                 "filler_content",
-                "Conversational filler is not worth storing as a memory.",
+                "Conversational greeting or acknowledgement with no durable information.",
                 candidate_id=candidate_id,
                 confidence=float(candidate.confidence),
             ),
@@ -526,44 +539,96 @@ def validate_candidate(
             candidate,
         )
 
-    if float(candidate.importance) < MIN_IMPORTANCE:
+    signals = candidate.admission
+    if signals is None:
         return CandidateValidation(
             _skip(
-                "low_importance",
-                (
-                    f"Importance {float(candidate.importance):.2f} is below the "
-                    f"{MIN_IMPORTANCE:.2f} floor."
-                ),
+                "admission_signals_missing",
+                "Insufficient evidence of durable, useful information.",
                 candidate_id=candidate_id,
-                confidence=float(candidate.confidence),
-            ),
-            candidate,
-        )
-    if float(candidate.confidence) < MIN_CONFIDENCE:
-        return CandidateValidation(
-            _skip(
-                "low_confidence",
-                (
-                    f"Confidence {float(candidate.confidence):.2f} is below the "
-                    f"{MIN_CONFIDENCE:.2f} floor."
-                ),
-                candidate_id=candidate_id,
-                confidence=float(candidate.confidence),
+                confidence=candidate.confidence,
             ),
             candidate,
         )
 
+    non_memory_reasons = {
+        "greeting": (
+            "conversational_greeting",
+            "Conversational greeting with no durable information.",
+        ),
+        "acknowledgement": (
+            "conversational_acknowledgement",
+            "Conversational acknowledgement with no durable information.",
+        ),
+        "chitchat": ("conversational_filler", "Conversational filler with no durable information."),
+        "question": ("question_without_fact", "A question without a supported durable fact."),
+        "one_off_request": (
+            "temporary_request",
+            "Temporary request unlikely to matter outside this interaction.",
+        ),
+    }
+    rejection: tuple[str, str] | None = non_memory_reasons.get(signals.content_kind)
+    if rejection is None and signals.evidence_source != "user":
+        rejection = (
+            ("assistant_generated", "Assistant-generated information lacks user evidence.")
+            if signals.evidence_source == "assistant"
+            else ("unsupported_inference", "Insufficient user evidence for a durable fact.")
+        )
+    if rejection is None and signals.durability != "lasting":
+        rejection = (
+            ("transient_information", "Temporary conversational state has no long-term value.")
+            if signals.durability == "transient"
+            else (
+                "uncertain_durability",
+                "Durability is uncertain; not suitable for long-term memory.",
+            )
+        )
+    if rejection is None and signals.specificity != "specific":
+        rejection = ("vague_information", "Too vague to support useful future recall.")
+    expected_value = {
+        MemoryType.PREFERENCE: "personalization",
+        MemoryType.SEMANTIC: "reference",
+        MemoryType.PROCEDURAL: "procedure",
+        MemoryType.EPISODIC: "significant_event",
+    }[candidate.memory_type]
+    if rejection is None and signals.future_value != expected_value:
+        rejection = ("no_future_value", "No clear future use for this memory type.")
+    if rejection is None and not candidate.worth_remembering:
+        rejection = ("candidate_declined", "No useful long-term information was identified.")
+    if rejection is None and candidate.confidence < MIN_CONFIDENCE:
+        rejection = ("low_confidence", "Insufficient confidence in the source-supported claim.")
+    importance_floor = 0.55 if candidate.memory_type is MemoryType.EPISODIC else MIN_IMPORTANCE
+    if rejection is None and candidate.importance < importance_floor:
+        rejection = (
+            "low_importance",
+            "Limited future usefulness does not justify long-term storage.",
+        )
+    if rejection is not None:
+        return CandidateValidation(
+            _skip(
+                *rejection,
+                candidate_id=candidate_id,
+                confidence=candidate.confidence,
+            ),
+            candidate,
+        )
     return _accepted_candidate_validation(candidate)
 
 
 def _accepted_candidate_validation(candidate: CandidateMemory) -> CandidateValidation:
+    reasons = {
+        MemoryType.PREFERENCE: "Stable preference with future personalization value.",
+        MemoryType.SEMANTIC: "Specific, durable fact with future reference value.",
+        MemoryType.PROCEDURAL: "Reusable instruction with future execution value.",
+        MemoryType.EPISODIC: "Significant event with future historical value.",
+    }
     return CandidateValidation(
         _action(
             IngestDecisionType.CREATED,
-            "candidate_accepted",
-            "Candidate passed deterministic evidence and retention policy checks.",
+            f"admitted_{candidate.memory_type.value}",
+            reasons[candidate.memory_type],
             candidate_id=candidate.candidate_id,
-            confidence=float(candidate.confidence),
+            confidence=candidate.confidence,
         ),
         candidate,
     )
@@ -719,10 +784,7 @@ def validate_reinforcement(
                 candidate_id=candidate.candidate_id,
                 related_memory_id=existing_memory.id,
             )
-        if (
-            relation_confidence is None
-            or relation_confidence < REINFORCE_RELATION_CONFIDENCE
-        ):
+        if relation_confidence is None or relation_confidence < REINFORCE_RELATION_CONFIDENCE:
             return _reject(
                 "low_relation_confidence",
                 (
@@ -757,11 +819,9 @@ def validate_reinforcement(
         else "same_context_paraphrase_new_interaction"
     )
     reason_summary = (
-        "The same proposition was confirmed by a distinct interaction; persistence "
-        "may increment its count."
+        "Already represented by an existing memory; confirmed by this interaction."
         if exact_match
-        else "A high-confidence, source-supported paraphrase in the same context "
-        "confirmed the existing proposition; persistence may increment its count."
+        else "A source-supported paraphrase confirms an existing memory in the same context."
     )
     return _action(
         IngestDecisionType.REINFORCED,
@@ -778,11 +838,7 @@ def _as_candidate_map(
     candidates: Mapping[str, CandidateMemory] | Iterable[CandidateMemory],
 ) -> dict[str, CandidateMemory]:
     if isinstance(candidates, Mapping):
-        return {
-            key: value
-            for key, value in candidates.items()
-            if _is_candidate_memory(value)
-        }
+        return {key: value for key, value in candidates.items() if _is_candidate_memory(value)}
     return {
         candidate.candidate_id: candidate
         for candidate in candidates
@@ -796,17 +852,6 @@ def _as_memory_map(
     if isinstance(memories, Mapping):
         return {key: value for key, value in memories.items() if _is_memory_record(value)}
     return {memory.id: memory for memory in memories if _is_memory_record(memory)}
-
-
-def _same_identity(left: CandidateMemory, right: MemoryRecord) -> bool:
-    if left.memory_type is not right.memory_type:
-        return False
-    for field in ("subject", "context_key", "attribute_key"):
-        left_value = normalize_text(getattr(left, field) or "")
-        right_value = normalize_text(getattr(right, field) or "")
-        if not left_value or not right_value or left_value != right_value:
-            return False
-    return True
 
 
 def _canonical_token(token: str) -> str:
@@ -849,6 +894,8 @@ def _compatible_attribute_key(left: str | None, right: str | None) -> bool:
 def _same_reinforcement_identity(left: CandidateMemory, right: MemoryRecord) -> bool:
     if left.memory_type is not right.memory_type:
         return False
+    if not normalize_text(left.subject or "") or not normalize_text(right.subject or ""):
+        return False
     if normalize_text(left.subject or "") != normalize_text(right.subject or ""):
         return False
     return _compatible_context_key(
@@ -858,24 +905,32 @@ def _same_reinforcement_identity(left: CandidateMemory, right: MemoryRecord) -> 
 
 def _semantic_proposition_tokens(value: str, *, subject: str | None) -> set[str]:
     subject_tokens = _key_tokens(subject) if subject else set()
+    text = re.sub(r"(?<=\w)['’]s\b", "", normalize_text(value))
     tokens = {
         _canonical_token(token)
-        for token in _WORD_RE.findall(normalize_text(value))
+        for token in _WORD_RE.findall(text)
         if token not in _PROPOSITION_STOPWORDS
     }
     return tokens - subject_tokens - _PROPOSITION_PREDICATES
 
 
 def _same_semantic_proposition(candidate: CandidateMemory, existing: MemoryRecord) -> bool:
-    candidate_tokens = _semantic_proposition_tokens(
-        candidate.content, subject=candidate.subject
-    )
-    existing_tokens = _semantic_proposition_tokens(
-        existing.content, subject=existing.subject
-    )
+    candidate_tokens = _semantic_proposition_tokens(candidate.content, subject=candidate.subject)
+    existing_tokens = _semantic_proposition_tokens(existing.content, subject=existing.subject)
     if not candidate_tokens or not existing_tokens:
         return False
     shared = candidate_tokens & existing_tokens
+    # A shared subject, attribute name, or context is not a shared value.
+    # For example, "primary editor" cannot make VS Code and Cursor equivalent.
+    identity_tokens = _key_tokens(
+        " ".join(
+            value or ""
+            for item in (candidate, existing)
+            for value in (item.context_key, item.attribute_key)
+        )
+    )
+    if not shared - identity_tokens:
+        return False
     coverage = len(shared) / min(len(candidate_tokens), len(existing_tokens))
     if len(shared) >= 2 and coverage >= 0.60:
         return True
@@ -885,16 +940,71 @@ def _same_semantic_proposition(candidate: CandidateMemory, existing: MemoryRecor
 def _has_reinforcement_change_language(source_text: str, evidence_excerpt: str) -> bool:
     text = " ".join((source_text, evidence_excerpt))
     return bool(
-        _REINFORCEMENT_NEGATION_RE.search(text)
-        or _REINFORCEMENT_REPLACEMENT_RE.search(text)
+        _REINFORCEMENT_NEGATION_RE.search(text) or _REINFORCEMENT_REPLACEMENT_RE.search(text)
     )
 
 
-def _explicit_change(source_text: str, evidence_excerpt: str) -> bool:
-    # Only source-backed text may prove a correction. Candidate content is a
-    # model assertion and can contain an invented temporal/change marker.
-    text = " ".join((source_text, evidence_excerpt))
-    return bool(_EXPLICIT_CHANGE_RE.search(normalize_text(text)))
+def _explicit_change(
+    source_text: str,
+    replacement_evidence: str | None,
+    candidate: CandidateMemory,
+    existing: MemoryRecord,
+) -> bool:
+    """Require a source-backed replacement clause tied to this changed value."""
+
+    if not replacement_evidence or not evidence_is_supported(source_text, replacement_evidence):
+        return False
+    incoming = _semantic_proposition_tokens(candidate.content, subject=candidate.subject)
+    previous = _semantic_proposition_tokens(existing.content, subject=existing.subject)
+    new_value = incoming - previous
+    identity = _key_tokens(candidate.attribute_key or "") | (incoming & previous)
+    identity -= _key_tokens(candidate.context_key or "")
+    if not new_value:
+        return False
+    # An unrelated correction elsewhere in a multi-statement interaction must
+    # not authorize this update. The model supplies the narrow quote; each
+    # sentence must independently connect the replacement to the proposition.
+    for clause in re.split(r"[.!?;\n]+", replacement_evidence):
+        tokens = _key_tokens(clause)
+        if (
+            _EXPLICIT_CHANGE_RE.search(clause)
+            and not _UNCERTAIN_CHANGE_RE.search(clause)
+            and tokens & new_value
+            and tokens & (identity | (previous - incoming))
+        ):
+            return True
+    return False
+
+
+def _different_context(candidate: CandidateMemory, existing: MemoryRecord) -> bool:
+    separate_context = bool(
+        candidate.context_key
+        and existing.context_key
+        and not _compatible_context_key(candidate.context_key, existing.context_key)
+    )
+    separate_time = (
+        candidate.expires_at is not None and candidate.expires_at <= existing.effective_at
+    ) or (
+        existing.expires_at is not None
+        and candidate.effective_at is not None
+        and existing.expires_at <= candidate.effective_at
+    )
+    return separate_context or separate_time
+
+
+def _new_relationship(
+    candidate: CandidateMemory, existing: MemoryRecord | None = None, *, contextual: bool = False
+) -> PolicyAction:
+    return _action(
+        IngestDecisionType.CREATED,
+        "contextual_coexistence" if contextual else "new_memory",
+        "Different context; both memories remain valid."
+        if contextual
+        else "No equivalent existing memory.",
+        candidate_id=candidate.candidate_id,
+        related_memory_id=existing.id if contextual and existing is not None else None,
+        confidence=candidate.confidence,
+    )
 
 
 def _dispute(
@@ -927,12 +1037,10 @@ def validate_relation(
 ) -> PolicyAction:
     """Validate a model relation against allowlisted IDs and source evidence.
 
-    ``supersede`` is intentionally narrow: all three identity keys must be
-    present and equal, the source must explicitly describe a correction/change,
-    relation confidence must be at least ``0.85``, and the candidate's explicit
-    effective time must be newer than the existing memory. If a conflict is
-    plausible but those conditions are ambiguous, the safe result is
-    ``disputed`` so both versions remain available.
+    Known context/identity differences create independent memories. Supersession
+    requires compatible identity, incompatible values, confidence >= 0.90, a
+    source-backed replacement clause tied to the changed value, an active target,
+    and a newer effective time. Ambiguous conflicts preserve both for review.
     """
 
     if not _is_relation_assessment(assessment):
@@ -974,8 +1082,8 @@ def validate_relation(
 
     relation = assessment.relation
     related_id = assessment.related_memory_id
-    if relation in {MemoryRelation.NEW, MemoryRelation.SKIP}:
-        if related_id is not None:
+    if relation is MemoryRelation.SKIP or (relation is MemoryRelation.NEW and related_id is None):
+        if relation is MemoryRelation.SKIP and related_id is not None:
             return _reject(
                 "unexpected_related_memory_id",
                 f"Relation {relation.value} cannot target an existing memory.",
@@ -993,12 +1101,51 @@ def validate_relation(
             )
         if not candidate_validation.accepted:
             return candidate_validation.action
-        return _action(
-            IngestDecisionType.CREATED,
-            "new_candidate",
-            assessment.reason_summary,
-            candidate_id=candidate.candidate_id,
-            confidence=float(candidate.confidence),
+        existing_match = next(
+            (
+                memory
+                for memory in sorted(memory_map.values(), key=lambda item: str(item.id))
+                if memory.status in {MemoryStatus.ACTIVE, MemoryStatus.DISPUTED}
+                and (
+                    same_proposition(candidate, memory)
+                    or (
+                        assessment.value_comparison == "equivalent"
+                        and _same_reinforcement_identity(candidate, memory)
+                        and _same_semantic_proposition(candidate, memory)
+                    )
+                )
+            ),
+            None,
+        )
+        if existing_match is not None:
+            if existing_match.status is MemoryStatus.DISPUTED:
+                return _skip(
+                    "pending_conflict_already_represented",
+                    "Already represented in a pending conflict; resolve it in Memory Review.",
+                    candidate_id=candidate.candidate_id,
+                )
+            return validate_reinforcement(
+                candidate,
+                existing_match,
+                interaction_id=interaction_id,
+                prior_interaction_ids=prior_interaction_ids,
+                used_candidate_ids=used_candidate_ids,
+                relation_confidence=relation_confidence,
+                source_text=source_text,
+            )
+        contextual_match = next(
+            (
+                memory
+                for memory in sorted(memory_map.values(), key=lambda item: str(item.id))
+                if memory.memory_type is candidate.memory_type
+                and normalize_text(memory.subject or "") == normalize_text(candidate.subject or "")
+                and _compatible_attribute_key(candidate.attribute_key, memory.attribute_key)
+                and _different_context(candidate, memory)
+            ),
+            None,
+        )
+        return _new_relationship(
+            candidate, contextual_match, contextual=contextual_match is not None
         )
 
     if not isinstance(related_id, UUID):
@@ -1019,9 +1166,63 @@ def validate_relation(
         )
 
     candidate_validation = validate_candidate(candidate, source_text)
+    if not candidate_validation.accepted:
+        return candidate_validation.action
+    if existing.status not in {MemoryStatus.ACTIVE, MemoryStatus.DISPUTED}:
+        return _reject(
+            "memory_not_current",
+            "Historical or forgotten memories cannot be changed by ingestion.",
+            candidate_id=candidate.candidate_id,
+            related_memory_id=existing.id,
+        )
+    # Similarity retrieves candidates; it does not bind independent subjects,
+    # attributes, or contexts into one lineage, even if the model proposes it.
+    if (
+        candidate.memory_type is not existing.memory_type
+        or (
+            candidate.subject
+            and existing.subject
+            and normalize_text(candidate.subject) != normalize_text(existing.subject)
+        )
+        or (
+            candidate.attribute_key
+            and existing.attribute_key
+            and not _compatible_attribute_key(candidate.attribute_key, existing.attribute_key)
+        )
+    ):
+        return _new_relationship(candidate)
+    if _different_context(candidate, existing):
+        return _new_relationship(candidate, existing, contextual=True)
+    if any(
+        memory.status is MemoryStatus.DISPUTED and same_proposition(candidate, memory)
+        for memory in memory_map.values()
+    ):
+        return _skip(
+            "pending_conflict_already_represented",
+            "Already represented in a pending conflict; resolve it in Memory Review.",
+            candidate_id=candidate.candidate_id,
+        )
+    if same_proposition(candidate, existing):
+        return validate_reinforcement(
+            candidate,
+            existing,
+            interaction_id=interaction_id,
+            prior_interaction_ids=prior_interaction_ids,
+            used_candidate_ids=used_candidate_ids,
+            relation_confidence=relation_confidence,
+            source_text=source_text,
+        )
+    if assessment.value_comparison == "distinct":
+        return _new_relationship(candidate)
     if relation is MemoryRelation.REINFORCE:
-        if not candidate_validation.accepted:
-            return candidate_validation.action
+        if assessment.value_comparison == "incompatible":
+            return _dispute(
+                "conflicting_values_need_review",
+                "Incompatible claims without enough evidence to choose the current one.",
+                candidate_id=candidate.candidate_id,
+                memory_id=existing.id,
+                confidence=relation_confidence,
+            )
         return validate_reinforcement(
             candidate,
             existing,
@@ -1032,39 +1233,26 @@ def validate_relation(
             source_text=source_text,
         )
 
-    if relation is MemoryRelation.DISPUTE:
-        if not candidate_validation.accepted:
-            return candidate_validation.action
-        if existing.status is not MemoryStatus.ACTIVE:
-            return _reject(
-                "memory_not_active",
-                "Only an active memory can be marked disputed by a new conflict.",
-                candidate_id=candidate.candidate_id,
-                related_memory_id=existing.id,
-                confidence=relation_confidence,
-            )
-        if not _same_identity(candidate, existing):
-            return _reject(
-                "ambiguous_dispute_identity",
-                (
-                    "A dispute must share subject, context, attribute, and memory type "
-                    "with the existing memory."
-                ),
-                candidate_id=candidate.candidate_id,
-                related_memory_id=existing.id,
-                confidence=relation_confidence,
-            )
-        if same_proposition(candidate, existing):
-            return _reject(
-                "same_proposition_not_dispute",
-                "An identical proposition is not a conflict and cannot mark the memory disputed.",
-                candidate_id=candidate.candidate_id,
-                related_memory_id=existing.id,
-                confidence=relation_confidence,
-            )
+    if (
+        assessment.value_comparison == "equivalent"
+        and _same_reinforcement_identity(candidate, existing)
+        and _same_semantic_proposition(candidate, existing)
+    ):
+        return validate_reinforcement(
+            candidate,
+            existing,
+            interaction_id=interaction_id,
+            prior_interaction_ids=prior_interaction_ids,
+            used_candidate_ids=used_candidate_ids,
+            relation_confidence=relation_confidence,
+            source_text=source_text,
+        )
+    if relation is MemoryRelation.NEW and assessment.value_comparison != "incompatible":
+        return _new_relationship(candidate)
+    if relation in {MemoryRelation.DISPUTE, MemoryRelation.NEW}:
         return _dispute(
-            "explicit_conflict_preserved",
-            "The relation is retained as a dispute; both memory versions are preserved.",
+            "conflicting_values_need_review",
+            "Incompatible claims without enough evidence to choose the current one.",
             candidate_id=candidate.candidate_id,
             memory_id=existing.id,
             confidence=relation_confidence,
@@ -1079,8 +1267,22 @@ def validate_relation(
             confidence=relation_confidence,
         )
 
-    if not candidate_validation.accepted:
-        return candidate_validation.action
+    if not _same_reinforcement_identity(candidate, existing):
+        return _dispute(
+            "ambiguous_supersede_identity",
+            "The proposition identity is uncertain; both claims are preserved for review.",
+            candidate_id=candidate.candidate_id,
+            memory_id=existing.id,
+            confidence=relation_confidence,
+        )
+    if existing.status is MemoryStatus.DISPUTED:
+        return _dispute(
+            "pending_conflict_requires_review",
+            "An unresolved conflict needs an owner decision before this value can change.",
+            candidate_id=candidate.candidate_id,
+            memory_id=existing.id,
+            confidence=relation_confidence,
+        )
     if relation_confidence < SUPERSEDE_RELATION_CONFIDENCE:
         return _dispute(
             "ambiguous_supersede_confidence",
@@ -1092,28 +1294,15 @@ def validate_relation(
             memory_id=existing.id,
             confidence=relation_confidence,
         )
-    if not _same_identity(candidate, existing):
+    if assessment.value_comparison != "incompatible":
         return _dispute(
-            "ambiguous_supersede_identity",
-            (
-                "Subject, context, and attribute keys do not identify the same "
-                "proposition; both versions are preserved."
-            ),
+            "unproven_value_change",
+            "A different incompatible value was not established; both claims need review.",
             candidate_id=candidate.candidate_id,
             memory_id=existing.id,
             confidence=relation_confidence,
         )
-    if same_proposition(candidate, existing):
-        return validate_reinforcement(
-            candidate,
-            existing,
-            interaction_id=interaction_id,
-            prior_interaction_ids=prior_interaction_ids,
-            used_candidate_ids=used_candidate_ids,
-            relation_confidence=relation_confidence,
-            source_text=source_text,
-        )
-    if not _explicit_change(source_text, assessment.evidence_excerpt):
+    if not _explicit_change(source_text, assessment.replacement_evidence, candidate, existing):
         return _dispute(
             "ambiguous_supersede_change",
             (
@@ -1156,13 +1345,130 @@ def validate_relation(
     return _action(
         IngestDecisionType.SUPERSEDED,
         "explicit_newer_correction",
-        (
-            "An explicit, evidenced correction with a newer effective time may "
-            "supersede the existing memory."
-        ),
+        "Explicitly replaces the previous value; the old version remains in history.",
         candidate_id=candidate.candidate_id,
         related_memory_id=existing.id,
         confidence=relation_confidence,
+    )
+
+
+@dataclass(frozen=True, slots=True)
+class ConsolidationPlan:
+    sources: tuple[MemoryRecord, ...]
+    canonical: MemoryRecord
+
+
+@dataclass(frozen=True, slots=True)
+class ConsolidationValidation:
+    plan: ConsolidationPlan | None
+    reason: str
+
+
+def _candidate_from_record(memory: MemoryRecord) -> CandidateMemory:
+    from memoryos.contracts.ingestion import CandidateMemory
+
+    return CandidateMemory(
+        candidate_id=str(memory.id),
+        content=memory.content,
+        memory_type=memory.memory_type,
+        subject=memory.subject,
+        context_key=memory.context_key,
+        attribute_key=memory.attribute_key,
+        importance=memory.importance,
+        confidence=memory.confidence,
+        evidence_excerpt=memory.content[:1000],
+    )
+
+
+def _consolidation_tokens(memory: CandidateMemory | MemoryRecord) -> set[str]:
+    return _semantic_proposition_tokens(memory.content, subject=memory.subject) - _key_tokens(
+        memory.context_key or ""
+    )
+
+
+def validate_consolidation(
+    sources: Collection[MemoryRecord],
+    *,
+    as_of: datetime,
+    candidate: CandidateMemory | None = None,
+    relation_confidence: float = 1.0,
+    automatic: bool = True,
+) -> ConsolidationValidation:
+    """Choose a verbatim source that covers equivalent, nested propositions.
+
+    Retrieval/model equivalence only proposes the group. No generated summary
+    or centroid can drop details: a preserved source must cover every source's
+    substantive tokens. Incomparable values, negation, numbers, contexts, and
+    timeframes fail closed. This intentionally misses less obvious paraphrases.
+    """
+    ordered = tuple(sorted(sources, key=lambda item: str(item.id)))
+
+    def refuse(reason: str) -> ConsolidationValidation:
+        return ConsolidationValidation(None, f"Kept separate — {reason}.")
+
+    if len(ordered) < 2 or len(ordered) > 8 or len({m.id for m in ordered}) != len(ordered):
+        return refuse("a consolidation requires 2–8 distinct sources")
+    first = ordered[0]
+    if any(len(m.content) > 2000 for m in ordered):
+        return refuse("a source exceeds the canonical memory size limit")
+    snapshot = require_utc(as_of, field_name="as_of")
+    if any(m.status is not MemoryStatus.ACTIVE for m in ordered):
+        return refuse("only active memories can be consolidated")
+    if any(
+        m.scope_id != first.scope_id
+        or m.embedding_model != first.embedding_model
+        or m.embedding_dimensions != first.embedding_dimensions
+        for m in ordered
+    ):
+        return refuse("sources must share one scope and embedding space")
+    reference = _candidate_from_record(first)
+    if any(not _same_reinforcement_identity(reference, m) for m in ordered):
+        return refuse("subjects, attributes, or contexts differ")
+    if any(
+        m.effective_at > snapshot or (m.expires_at and m.expires_at <= snapshot) for m in ordered
+    ):
+        return refuse("future or expired information cannot become current")
+    if len({m.expires_at for m in ordered}) != 1:
+        return refuse("the validity windows differ")
+    if first.memory_type is MemoryType.EPISODIC and len({m.effective_at for m in ordered}) != 1:
+        return refuse("distinct events must retain their own timeframes")
+    if automatic and (
+        relation_confidence < 0.95
+        or min(m.confidence for m in ordered) < 0.90
+        or candidate is None
+        or candidate.confidence < 0.90
+    ):
+        return refuse("equivalence evidence is not strong enough for an automatic change")
+    if len({normalize_text(m.content) for m in ordered}) > 1 and any(
+        _has_reinforcement_change_language(m.content, m.content) for m in ordered
+    ):
+        return refuse("negation or change language needs human judgment")
+    numeric_values = {tuple(re.findall(r"\b\d+(?:\.\d+)?\b", m.content)) for m in ordered}
+    if len(numeric_values) != 1:
+        return refuse("numeric values differ")
+    values = {m.id: _consolidation_tokens(m) for m in ordered}
+    for index, left in enumerate(ordered):
+        for right in ordered[index + 1 :]:
+            a, b = values[left.id], values[right.id]
+            if (
+                not a
+                or not b
+                or not (a <= b or b <= a)
+                or not _same_semantic_proposition(_candidate_from_record(left), right)
+            ):
+                return refuse("the memories contain distinct or uncertain knowledge")
+    canonical = max(ordered, key=lambda m: (len(values[m.id]), len(m.content), str(m.id)))
+    if any(not value <= values[canonical.id] for value in values.values()):
+        return refuse("no source preserves the full shared information")
+    if candidate is not None and (
+        not _same_reinforcement_identity(candidate, canonical)
+        or not _same_semantic_proposition(candidate, canonical)
+        or not _consolidation_tokens(candidate) <= values[canonical.id]
+    ):
+        return refuse("the incoming claim adds information or changes its context")
+    return ConsolidationValidation(
+        ConsolidationPlan(ordered, canonical),
+        f"Overlaps with {len(ordered)} existing memories expressing the same durable proposition.",
     )
 
 
@@ -1301,9 +1607,7 @@ def score_explanation(score: RecallScoreBreakdown) -> str:
         match_strength = "Weak"
     days = f"{score.days_since_confirmation:.1f}".rstrip("0").rstrip(".")
     evidence = (
-        "repeated supporting evidence"
-        if score.reinforcement > 0
-        else "initial supporting evidence"
+        "repeated supporting evidence" if score.reinforcement > 0 else "initial supporting evidence"
     )
     return (
         f"{match_strength} semantic match; confirmed {days} days ago, with {evidence}. "

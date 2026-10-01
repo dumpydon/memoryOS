@@ -32,6 +32,7 @@ class InteractionStatus(StrEnum):
 
 class IngestDecisionType(StrEnum):
     CREATED = "created"
+    CONSOLIDATED = "consolidated"
     REINFORCED = "reinforced"
     SUPERSEDED = "superseded"
     DISPUTED = "disputed"
@@ -55,4 +56,3 @@ class MemoryEventType(StrEnum):
     FORGOTTEN = "forgotten"
     RESOLVED = "resolved"
     EXPIRED = "expired"
-

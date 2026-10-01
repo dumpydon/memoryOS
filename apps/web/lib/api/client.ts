@@ -3,8 +3,13 @@ import type { ExecutionMode } from "./types";
 export const PUBLIC_DEMO_SCOPE = "00000000-0000-0000-0000-000000000001";
 export const PRIVATE_LIVE_SCOPE = "00000000-0000-0000-0000-000000000002";
 export const DEMO_EMBEDDING_MODEL = "demo-fixture-v1";
-export const API_BASE_URL =
-  process.env.NEXT_PUBLIC_API_BASE_URL || "http://127.0.0.1:8000";
+const configuredApiBaseUrl = process.env.NEXT_PUBLIC_API_BASE_URL?.trim();
+if (process.env.NODE_ENV === "production" && !configuredApiBaseUrl) {
+  throw new Error(
+    "NEXT_PUBLIC_API_BASE_URL must be set before a production build.",
+  );
+}
+export const API_BASE_URL = configuredApiBaseUrl || "http://127.0.0.1:8000";
 const API_TIMEOUT_MS = 90_000;
 
 export class ApiClientError extends Error {

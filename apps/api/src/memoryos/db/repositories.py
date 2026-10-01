@@ -22,7 +22,7 @@ from uuid import UUID
 
 from sqlalchemy import Select, and_, case, func, literal, or_, select
 from sqlalchemy.exc import IntegrityError
-from sqlalchemy.orm import Session
+from sqlalchemy.orm import Session, aliased
 
 from memoryos.config import Settings, get_settings
 from memoryos.contracts.ingestion import CandidateMemory
@@ -294,7 +294,12 @@ def _stored_memory(row: Memory) -> StoredMemory:
     )
 
 
-def _event_contract(row: MemoryEvent) -> MemoryEventContract:
+def _event_contract(
+    row: MemoryEvent,
+    *,
+    source_occurred_at: datetime | None = None,
+    fallback_evidence: str | None = None,
+) -> MemoryEventContract:
     return MemoryEventContract(
         id=row.id,
         scope_id=row.scope_id,
@@ -302,12 +307,14 @@ def _event_contract(row: MemoryEvent) -> MemoryEventContract:
         interaction_id=row.interaction_id,
         event_type=row.event_type,
         related_memory_id=row.related_memory_id,
-        evidence_excerpt=row.evidence_excerpt,
+        evidence_excerpt=row.evidence_excerpt or fallback_evidence,
+        provenance=row.provenance,
         reason_code=row.reason_code,
         reason_summary=row.reason_summary,
         before=row.before,
         after=row.after,
         created_at=row.created_at,
+        source_occurred_at=source_occurred_at,
     )
 
 
@@ -792,7 +799,7 @@ class MemoryRepository:
                 Memory.id == event.memory_id,
             )
         )
-        if candidate_row is None:
+        if candidate_row is None or candidate_row.status is not MemoryStatus.DISPUTED:
             return None
         related_id = event.related_memory_id
         if related_id is None:
@@ -813,7 +820,13 @@ class MemoryRepository:
                 MemoryReview.scope_id == event.scope_id,
                 MemoryReview.kind == "conflict",
                 MemoryReview.status == "pending",
-                MemoryReview.memory_id == event.memory_id,
+                or_(
+                    MemoryReview.memory_id == event.memory_id,
+                    and_(
+                        MemoryReview.memory_id == related_id,
+                        MemoryReview.existing_memory_id == event.memory_id,
+                    ),
+                ),
             )
             .with_for_update()
         )
@@ -925,9 +938,7 @@ class MemoryRepository:
                 if existing_memory is not None
                 else None
             ),
-            source_memories_json=cast(
-                list[dict[str, Any]], _jsonable(source_list)
-            ),
+            source_memories_json=cast(list[dict[str, Any]], _jsonable(source_list)),
             source_memory_ids=[str(source.id) for source in source_list],
             proposed_relation=_enum_value(proposed_relation, MemoryRelation),
             confidence=numeric_confidence,
@@ -975,6 +986,54 @@ class MemoryRepository:
             if status not in {"pending", "resolved"}:
                 raise ValueError("review status must be pending or resolved")
             conditions.append(MemoryReview.status == status)
+        if status == "pending":
+            # Legacy disputes can have two mirrored audit rows. Present the newest
+            # orientation once, while retaining both records for resolution/history.
+            mirror = aliased(MemoryReview)
+            newer_mirror = (
+                select(mirror.id)
+                .where(
+                    mirror.scope_id == MemoryReview.scope_id,
+                    mirror.kind == "conflict",
+                    mirror.status == "pending",
+                    mirror.memory_id == MemoryReview.existing_memory_id,
+                    mirror.existing_memory_id == MemoryReview.memory_id,
+                    or_(
+                        mirror.created_at > MemoryReview.created_at,
+                        and_(
+                            mirror.created_at == MemoryReview.created_at,
+                            mirror.id > MemoryReview.id,
+                        ),
+                    ),
+                )
+                .exists()
+            )
+            conditions.append(~newer_mirror)
+        elif status == "resolved":
+            mirror = aliased(MemoryReview)
+            same_decision = (
+                select(mirror.id)
+                .where(
+                    mirror.scope_id == MemoryReview.scope_id,
+                    mirror.kind == "conflict",
+                    MemoryReview.kind == "conflict",
+                    mirror.status == "resolved",
+                    mirror.memory_id == MemoryReview.memory_id,
+                    mirror.resolved_at == MemoryReview.resolved_at,
+                    func.jsonb_array_length(MemoryReview.source_memory_ids) == 2,
+                    func.jsonb_array_length(mirror.source_memory_ids) == 2,
+                    mirror.source_memory_ids.contains(MemoryReview.source_memory_ids),
+                    or_(
+                        mirror.created_at > MemoryReview.created_at,
+                        and_(
+                            mirror.created_at == MemoryReview.created_at,
+                            mirror.id > MemoryReview.id,
+                        ),
+                    ),
+                )
+                .exists()
+            )
+            conditions.append(~same_decision)
         total = int(
             self.session.scalar(
                 select(func.count()).select_from(
@@ -1019,6 +1078,31 @@ class MemoryRepository:
                 .order_by(MemoryEvent.created_at.asc(), MemoryEvent.id.asc())
             )
         )
+        interaction_ids = {row.interaction_id for row in events if row.interaction_id is not None}
+        source_times: dict[UUID, datetime] = {}
+        if interaction_ids:
+            for interaction_id, occurred_at in self.session.execute(
+                select(Interaction.id, Interaction.occurred_at).where(
+                    Interaction.scope_id == scope_id, Interaction.id.in_(interaction_ids)
+                )
+            ):
+                source_times[interaction_id] = occurred_at
+        missing_fixture_evidence = {
+            row.interaction_id
+            for row in events
+            if row.interaction_id is not None
+            and not row.evidence_excerpt
+            and row.provenance == "demo-fixture"
+        }
+        fixture_quotes: dict[UUID, str] = {}
+        if missing_fixture_evidence:
+            for interaction_id, text in self.session.execute(
+                select(Interaction.id, Interaction.text).where(
+                    Interaction.scope_id == scope_id,
+                    Interaction.id.in_(missing_fixture_evidence),
+                )
+            ):
+                fixture_quotes[interaction_id] = text[:1000]
         active = [row for row in versions if row.status == MemoryStatus.ACTIVE]
         current = max(active or versions, key=lambda row: (row.version, row.id.hex))
         return MemoryHistoryResponse(
@@ -1027,7 +1111,22 @@ class MemoryRepository:
                 MemoryVersion(memory=_memory_record(row), is_current=row.id == current.id)
                 for row in versions
             ],
-            events=[_event_contract(row) for row in events],
+            events=[
+                _event_contract(
+                    row,
+                    source_occurred_at=(
+                        source_times.get(row.interaction_id)
+                        if row.interaction_id is not None
+                        else None
+                    ),
+                    fallback_evidence=(
+                        fixture_quotes.get(row.interaction_id)
+                        if row.interaction_id is not None
+                        else None
+                    ),
+                )
+                for row in events
+            ],
         )
 
     def list_events(self, *, scope_id: UUID, memory_id: UUID) -> list[MemoryEventContract]:
@@ -1072,6 +1171,9 @@ class MemoryRepository:
                     Memory.attribute_key.ilike(pattern),
                 )
             )
+        total = self.session.scalar(
+            select(func.count()).select_from(select(Memory.id).where(*conditions).subquery())
+        ) or 0
         if cursor:
             created_at, memory_id = _decode_cursor(cursor)
             conditions.append(
@@ -1081,7 +1183,6 @@ class MemoryRepository:
                 )
             )
         base = select(Memory).where(*conditions)
-        total = self.session.scalar(select(func.count()).select_from(base.subquery())) or 0
         rows = list(
             self.session.scalars(
                 base.order_by(Memory.created_at.desc(), Memory.id.desc()).limit(limit + 1)
@@ -1231,9 +1332,7 @@ class MemoryRepository:
         if embedding_model is not None:
             conditions.append(Memory.embedding_model == embedding_model)
         attribute_match = (
-            (Memory.attribute_key == attribute_key)
-            if attribute_key is not None
-            else literal(False)
+            (Memory.attribute_key == attribute_key) if attribute_key is not None else literal(False)
         )
         context_match = (
             (Memory.context_key == context_key) if context_key is not None else literal(False)

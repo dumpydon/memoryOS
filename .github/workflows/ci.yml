@@ -60,6 +60,8 @@ jobs:
   web:
     name: Web checks
     runs-on: ubuntu-latest
+    env:
+      NEXT_PUBLIC_API_BASE_URL: http://127.0.0.1:8000
     steps:
       - uses: actions/checkout@v4
       - uses: pnpm/action-setup@v4
@@ -77,6 +79,9 @@ jobs:
       - name: Type check
         working-directory: apps/web
         run: pnpm typecheck
+      - name: Focused web regressions
+        working-directory: apps/web
+        run: node --experimental-strip-types --test lib/api/*.test.mjs
       - name: Production build
         working-directory: apps/web
         run: pnpm build

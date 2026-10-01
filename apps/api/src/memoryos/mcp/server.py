@@ -6,6 +6,7 @@ import asyncio
 import os
 from datetime import datetime
 from typing import Any
+from urllib.parse import urlsplit
 from uuid import UUID
 
 from mcp.server.mcpserver import Context
@@ -222,28 +223,45 @@ def create_http_app(
     server = create_server(settings, runtime=runtime)
     from mcp.server.transport_security import TransportSecuritySettings
 
-    app = server.streamable_http_app(
-        streamable_http_path="/",
-        json_response=True,
-        stateless_http=True,
-        transport_security=TransportSecuritySettings(
-            enable_dns_rebinding_protection=True,
-            allowed_hosts=[
+    runtime_settings = runtime.settings if runtime else settings or get_settings()
+    allowed_hosts: list[str] = []
+    allowed_origins = [runtime_settings.web_origin]
+    public_origin = runtime_settings.api_public_origin or runtime_settings.render_external_url
+    if public_origin:
+        public_url = urlsplit(public_origin)
+        if public_url.scheme not in {"http", "https"} or not public_url.netloc:
+            raise RuntimeError("API_PUBLIC_ORIGIN must be an HTTP(S) origin")
+        allowed_hosts.append(public_url.netloc)
+        allowed_origins.append(f"{public_url.scheme}://{public_url.netloc}")
+    if runtime_settings.app_env.casefold() not in {"production", "prod"}:
+        allowed_hosts.extend(
+            [
                 "127.0.0.1",
                 "127.0.0.1:*",
                 "localhost",
                 "localhost:*",
                 "testserver",
                 "testserver:*",
-            ],
-            allowed_origins=[
+            ]
+        )
+        allowed_origins.extend(
+            [
                 "http://127.0.0.1",
                 "http://127.0.0.1:*",
                 "http://localhost",
                 "http://localhost:*",
                 "http://testserver",
                 "http://testserver:*",
-            ],
+            ]
+        )
+    app = server.streamable_http_app(
+        streamable_http_path="/",
+        json_response=True,
+        stateless_http=True,
+        transport_security=TransportSecuritySettings(
+            enable_dns_rebinding_protection=True,
+            allowed_hosts=allowed_hosts,
+            allowed_origins=allowed_origins,
         ),
     )
     app.state.mcp_server = server

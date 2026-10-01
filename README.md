@@ -89,10 +89,10 @@ The REST API is versioned under `/v1`:
 Run the local MCP stdio server from `apps/api`:
 
 ```bash
-OWNER_API_TOKEN=memoryos-local-token uv run memoryos-mcp
+MEMORYOS_MCP_OWNER_TOKEN=memoryos-local-token uv run memoryos-mcp
 ```
 
-The deployed Streamable HTTP endpoint is `/mcp`. Public demo access is limited to the fixed demo scope and allowlisted scenarios/queries. Mutations, arbitrary input, live mode, and the private live scope require the owner token.
+For owner-only stdio operations, `MEMORYOS_MCP_OWNER_TOKEN` must match the API's configured `OWNER_API_TOKEN`. The deployed Streamable HTTP endpoint is `/mcp`; it uses the bearer header instead. Public demo access is limited to the fixed demo scope and allowlisted scenarios/queries. Mutations, arbitrary input, live mode, and the private live scope require the owner token.
 
 ## Architecture and policy
 
@@ -116,6 +116,7 @@ uv run pytest -q
 cd ../..
 pnpm --dir apps/web lint
 pnpm --dir apps/web typecheck
+# For a local production build, first copy apps/web/.env.example to apps/web/.env.local.
 pnpm --dir apps/web build
 ```
 

@@ -223,3 +223,8 @@ def test_recall_and_compare_use_curated_fixture_snapshot(service_context) -> Non
     assert response.items[0].score.raw_similarity >= response.items[-1].score.raw_similarity
     assert comparison.candidate_count == response.candidate_count
     assert all(item.memoryos_score.policy_version == "memoryos-v2" for item in comparison.memoryos)
+    assert comparison.score_weights["similarity"] == 0.55
+    assert {item.memory.id for item in comparison.naive} == {
+        item.memory.id for item in comparison.memoryos
+    }
+    assert all(item.movement_reason for item in comparison.memoryos)

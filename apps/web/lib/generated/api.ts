@@ -157,6 +157,23 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/v1/memories/{memory_id}/correct": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Correct Memory */
+        post: operations["correct_memory_v1_memories__memory_id__correct_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/v1/memories/{memory_id}/forget": {
         parameters: {
             query?: never;
@@ -259,6 +276,23 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/v1/recall/context": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Recall In Context */
+        post: operations["recall_in_context_v1_recall_context_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/v1/reviews": {
         parameters: {
             query?: never;
@@ -297,6 +331,37 @@ export interface paths {
 export type webhooks = Record<string, never>;
 export interface components {
     schemas: {
+        /**
+         * AdmissionSignals
+         * @description Semantic observations proposed by extraction; policy decides admission.
+         */
+        AdmissionSignals: {
+            /**
+             * Content Kind
+             * @enum {string}
+             */
+            content_kind: "information" | "greeting" | "acknowledgement" | "chitchat" | "question" | "one_off_request";
+            /**
+             * Durability
+             * @enum {string}
+             */
+            durability: "lasting" | "transient" | "uncertain";
+            /**
+             * Evidence Source
+             * @enum {string}
+             */
+            evidence_source: "user" | "inferred" | "assistant";
+            /**
+             * Future Value
+             * @enum {string}
+             */
+            future_value: "personalization" | "reference" | "procedure" | "significant_event" | "none";
+            /**
+             * Specificity
+             * @enum {string}
+             */
+            specificity: "specific" | "vague";
+        };
         /** ApiHealth */
         ApiHealth: {
             /**
@@ -318,6 +383,7 @@ export interface components {
         };
         /** CandidateMemory */
         CandidateMemory: {
+            admission: components["schemas"]["AdmissionSignals"] | null;
             /** Attribute Key */
             attribute_key: string | null;
             /** Candidate Id */
@@ -371,6 +437,73 @@ export interface components {
             scope_id: string;
             /** Source Memory Ids */
             source_memory_ids: string[];
+        };
+        /** ContextMemory */
+        ContextMemory: {
+            /** Content */
+            content: string;
+            /** Context Key */
+            context_key: string | null;
+            /**
+             * Id
+             * Format: uuid
+             */
+            id: string;
+            memory_type: components["schemas"]["MemoryType"];
+        };
+        /** ContextRequest */
+        ContextRequest: {
+            /**
+             * Limit
+             * @default 3
+             */
+            limit: number;
+            /** @default demo */
+            mode: components["schemas"]["ExecutionMode"];
+            /** Query */
+            query: string;
+            /**
+             * Scope Id
+             * Format: uuid
+             */
+            scope_id: string;
+        };
+        /** ContextResponse */
+        ContextResponse: {
+            /** Answer */
+            answer: string;
+            /** Memories Used */
+            memories_used: components["schemas"]["ContextMemory"][];
+            mode: components["schemas"]["ExecutionMode"];
+            /** Model */
+            model: string;
+            /** Query */
+            query: string;
+        };
+        /** CorrectionRequest */
+        CorrectionRequest: {
+            /** Expected Scope Revision */
+            expected_scope_revision?: number | null;
+            /** Idempotency Key */
+            idempotency_key?: string | null;
+            /** @default demo */
+            mode: components["schemas"]["ExecutionMode"];
+            /**
+             * Preview
+             * @default true
+             */
+            preview: boolean;
+            /** Reviewed Decisions */
+            reviewed_decisions?: components["schemas"]["IngestDecisionType"][] | null;
+            /** Reviewed Targets */
+            reviewed_targets?: (string | null)[] | null;
+            /**
+             * Scope Id
+             * Format: uuid
+             */
+            scope_id: string;
+            /** Text */
+            text: string;
         };
         /** DemoCatalogResponse */
         DemoCatalogResponse: {
@@ -444,8 +577,12 @@ export interface components {
         IngestDecision: {
             /** Candidate Id */
             candidate_id: string | null;
+            /** Canonical Content */
+            canonical_content: string | null;
             /** Confidence */
             confidence: number | null;
+            /** Consolidation Note */
+            consolidation_note: string | null;
             decision_type: components["schemas"]["IngestDecisionType"];
             /** Memory Id */
             memory_id: string | null;
@@ -455,14 +592,20 @@ export interface components {
             reason_summary: string;
             /** Related Memory Id */
             related_memory_id: string | null;
+            /** Source Memory Ids */
+            source_memory_ids: string[];
         };
         /**
          * IngestDecisionType
          * @enum {string}
          */
-        IngestDecisionType: "created" | "reinforced" | "superseded" | "disputed" | "skipped" | "rejected";
+        IngestDecisionType: "created" | "consolidated" | "reinforced" | "superseded" | "disputed" | "skipped" | "rejected";
         /** IngestInteractionRequest */
         IngestInteractionRequest: {
+            /** Correction Memory Id */
+            correction_memory_id?: string | null;
+            /** Expected Scope Revision */
+            expected_scope_revision?: number | null;
             /** Idempotency Key */
             idempotency_key?: string | null;
             /** Metadata */
@@ -478,6 +621,10 @@ export interface components {
              * @default false
              */
             preview: boolean;
+            /** Reviewed Decisions */
+            reviewed_decisions?: components["schemas"]["IngestDecisionType"][] | null;
+            /** Reviewed Targets */
+            reviewed_targets?: (string | null)[] | null;
             /**
              * Scope Id
              * Format: uuid
@@ -492,6 +639,11 @@ export interface components {
         IngestInteractionResponse: {
             /** Candidates */
             candidates: components["schemas"]["CandidateMemory"][];
+            /**
+             * Correction Commit Allowed
+             * @default false
+             */
+            correction_commit_allowed: boolean;
             /** Decisions */
             decisions: components["schemas"]["IngestDecision"][];
             /**
@@ -502,6 +654,10 @@ export interface components {
             /** Memory Ids */
             memory_ids: string[];
             mode: components["schemas"]["ExecutionMode"];
+            /** Preview Revision */
+            preview_revision: number | null;
+            /** Relation Assessments */
+            relation_assessments: components["schemas"]["RelationAssessment"][];
             /**
              * Scope Id
              * Format: uuid
@@ -557,6 +713,8 @@ export interface components {
              * Format: uuid
              */
             memory_id: string;
+            /** Provenance */
+            provenance: string | null;
             /** Reason Code */
             reason_code: string;
             /** Reason Summary */
@@ -568,6 +726,8 @@ export interface components {
              * Format: uuid
              */
             scope_id: string;
+            /** Source Occurred At */
+            source_occurred_at: string | null;
         };
         /**
          * MemoryEventType
@@ -797,6 +957,11 @@ export interface components {
             /** Memoryos Rank */
             memoryos_rank: number | null;
             memoryos_score: components["schemas"]["RecallScoreBreakdown"];
+            /**
+             * Movement Reason
+             * @default
+             */
+            movement_reason: string;
             /** Naive Rank */
             naive_rank: number | null;
             /** Naive Similarity */
@@ -826,6 +991,10 @@ export interface components {
              * Format: uuid
              */
             scope_id: string;
+            /** Score Weights */
+            score_weights: {
+                [key: string]: number;
+            };
         };
         /** RecallItem */
         RecallItem: {
@@ -921,6 +1090,32 @@ export interface components {
             /** Weighted Similarity */
             weighted_similarity: number;
         };
+        /** RelationAssessment */
+        RelationAssessment: {
+            /** Candidate Id */
+            candidate_id: string;
+            /** Confidence */
+            confidence: number;
+            /** Consolidation Source Ids */
+            consolidation_source_ids: string[];
+            /** Evidence Excerpt */
+            evidence_excerpt: string;
+            /** Reason Code */
+            reason_code: string;
+            /** Reason Summary */
+            reason_summary: string;
+            /** Related Memory Id */
+            related_memory_id: string | null;
+            relation: components["schemas"]["MemoryRelation"];
+            /** Replacement Evidence */
+            replacement_evidence: string | null;
+            /**
+             * Value Comparison
+             * @default uncertain
+             * @enum {string}
+             */
+            value_comparison: "equivalent" | "incompatible" | "distinct" | "uncertain";
+        };
         /** ResolveMemoryRequest */
         ResolveMemoryRequest: {
             /**
@@ -957,7 +1152,9 @@ export interface components {
              * Action
              * @enum {string}
              */
-            action: "keep_both" | "use_new" | "keep_existing" | "invalid";
+            action: "keep_both" | "use_new" | "keep_existing" | "invalid" | "merge";
+            /** Merged Content */
+            merged_content?: string | null;
             /**
              * Reason
              * @default Reviewed by owner
@@ -967,6 +1164,9 @@ export interface components {
         /** ReviewItem */
         ReviewItem: {
             candidate: components["schemas"]["CandidateMemory"];
+            /** Candidate Evidence */
+            candidate_evidence: components["schemas"]["MemoryEvent"][];
+            candidate_memory: components["schemas"]["MemoryRecord"] | null;
             /** Confidence */
             confidence: number;
             /**
@@ -974,14 +1174,19 @@ export interface components {
              * Format: date-time
              */
             created_at: string;
+            current_existing_memory: components["schemas"]["MemoryRecord"] | null;
             /** Evidence Excerpt */
             evidence_excerpt: string;
+            /** Existing Evidence */
+            existing_evidence: components["schemas"]["MemoryEvent"][];
             existing_memory: components["schemas"]["MemoryRecord"] | null;
             /**
              * Id
              * Format: uuid
              */
             id: string;
+            /** Keep Both Unavailable Reason */
+            keep_both_unavailable_reason: string | null;
             /**
              * Kind
              * @enum {string}
@@ -989,17 +1194,20 @@ export interface components {
             kind: "conflict" | "consolidation";
             /** Memory Id */
             memory_id: string | null;
+            /** Merge Unavailable Reason */
+            merge_unavailable_reason: string | null;
             proposed_relation: components["schemas"]["MemoryRelation"];
             /** Reason Code */
             reason_code: string;
             /** Reason Summary */
             reason_summary: string;
             /** Resolution */
-            resolution: ("keep_both" | "use_new" | "keep_existing" | "invalid") | null;
+            resolution: ("keep_both" | "use_new" | "keep_existing" | "invalid" | "merge") | null;
             /** Resolution Reason */
             resolution_reason: string | null;
             /** Resolved At */
             resolved_at: string | null;
+            result_memory: components["schemas"]["MemoryRecord"] | null;
             /**
              * Scope Id
              * Format: uuid
@@ -1302,6 +1510,41 @@ export interface operations {
             };
         };
     };
+    correct_memory_v1_memories__memory_id__correct_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                memory_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["CorrectionRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["IngestInteractionResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
     forget_memory_v1_memories__memory_id__forget_post: {
         parameters: {
             query: {
@@ -1493,6 +1736,39 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["RecallComparisonResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    recall_in_context_v1_recall_context_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ContextRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ContextResponse"];
                 };
             };
             /** @description Validation Error */

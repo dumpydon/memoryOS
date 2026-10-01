@@ -10,8 +10,8 @@ import {
   SlidersHorizontal,
 } from "lucide-react";
 import Link from "next/link";
-import { useMemo, useState } from "react";
-import { usePathname, useRouter, useSearchParams } from "next/navigation";
+import { useState } from "react";
+import { usePathname, useSearchParams } from "next/navigation";
 
 import {
   EmptyState,
@@ -37,27 +37,34 @@ const statuses: MemoryStatus[] = [
 ];
 
 export function MemoryExplorer() {
-  const router = useRouter();
   const pathname = usePathname();
   const searchParams = useSearchParams();
   const { scopeId, token } = useWorkspace();
-  const [draftSearch, setDraftSearch] = useState(
-    searchParams.get("search") || "",
-  );
+  const [asOf] = useState(() => Date.now());
+  const [searchResetKey, setSearchResetKey] = useState(0);
+  const appliedSearch = searchParams.get("search") || "";
+  const [cursorTrail, setCursorTrail] = useState<string[]>([]);
   const types = searchParams.getAll("type") as MemoryType[];
-  const selectedStatuses = searchParams.getAll("status") as MemoryStatus[];
-  const cursor = searchParams.get("cursor");
-  const query = useMemo(
-    () => ({
-      scopeId,
-      cursor,
-      limit: 25,
-      memoryTypes: types,
-      statuses: selectedStatuses,
-      search: searchParams.get("search") || undefined,
-    }),
-    [cursor, scopeId, searchParams, selectedStatuses, types],
+  const rawStatuses = searchParams.getAll("status");
+  const allStatuses = rawStatuses.includes("all");
+  const explicitStatuses = rawStatuses.filter(
+    (status): status is MemoryStatus =>
+      statuses.includes(status as MemoryStatus),
   );
+  const selectedStatuses: MemoryStatus[] = allStatuses
+    ? []
+    : explicitStatuses.length
+      ? explicitStatuses
+      : ["active"];
+  const cursor = searchParams.get("cursor");
+  const query = {
+    scopeId,
+    cursor,
+    limit: 25,
+    memoryTypes: types,
+    statuses: selectedStatuses,
+    search: appliedSearch || undefined,
+  };
   const memories = useQuery({
     queryKey: ["memories", query],
     queryFn: () => getMemories(query, token),
@@ -66,35 +73,56 @@ export function MemoryExplorer() {
   function updateUrl(
     changes: Record<string, string | string[] | null | undefined>,
   ) {
-    const next = new URLSearchParams(searchParams.toString());
+    if (["search", "type", "status"].some((key) => key in changes)) {
+      setCursorTrail([]);
+    }
+    // Client-only filters must compose against the latest URL, even between renders.
+    const next = new URLSearchParams(window.location.search);
     Object.entries(changes).forEach(([key, value]) => {
       next.delete(key);
       if (Array.isArray(value)) value.forEach((item) => next.append(key, item));
       else if (value) next.set(key, value);
     });
-    router.replace(
+    window.history.replaceState(
+      null,
+      "",
       `${pathname}${next.toString() ? `?${next.toString()}` : ""}`,
-      { scroll: false },
     );
   }
 
-  function toggleFilter(key: "type" | "status", value: string) {
-    const current = key === "type" ? types : selectedStatuses;
-    const next = current.includes(value as never)
-      ? current.filter((item) => item !== value)
-      : [...current, value];
-    updateUrl({ [key]: next, cursor: null });
+  function toggleType(type: MemoryType) {
+    const currentTypes = new URLSearchParams(window.location.search).getAll(
+      "type",
+    );
+    updateUrl({
+      type: currentTypes.includes(type)
+        ? currentTypes.filter((item) => item !== type)
+        : [...currentTypes, type],
+      cursor: null,
+    });
   }
 
-  function submitSearch(event: React.FormEvent<HTMLFormElement>) {
-    event.preventDefault();
-    updateUrl({ search: draftSearch.trim() || null, cursor: null });
+  function toggleStatus(status: MemoryStatus) {
+    const currentStatuses = new URLSearchParams(window.location.search).getAll(
+      "status",
+    );
+    const current =
+      currentStatuses.includes("all") ||
+      (!currentStatuses.length && status !== "active")
+        ? []
+        : currentStatuses.length
+          ? currentStatuses.filter((item) =>
+              statuses.includes(item as MemoryStatus),
+            )
+          : ["active"];
+    const next = current.includes(status)
+      ? current.filter((item) => item !== status)
+      : [...current, status];
+    updateUrl({ status: next.length ? next : ["all"], cursor: null });
   }
 
   const hasFilters =
-    types.length > 0 ||
-    selectedStatuses.length > 0 ||
-    Boolean(searchParams.get("search"));
+    types.length > 0 || rawStatuses.length > 0 || Boolean(appliedSearch);
 
   return (
     <div className="page-wrap explorer-page">
@@ -107,8 +135,8 @@ export function MemoryExplorer() {
           </div>
           <h1>Memory explorer</h1>
           <p className="page-subtitle">
-            Inspect active memories, provenance, confidence, and the history
-            behind each version.
+            Browse current knowledge and follow each memory back to its
+            evidence.
           </p>
         </div>
         <div className="header-actions">
@@ -119,7 +147,13 @@ export function MemoryExplorer() {
             </span>
           ) : null}
           <span className="count-pill">
-            {memories.data?.total ?? "—"} memories
+            {memories.data?.total ?? "—"}{" "}
+            {allStatuses ||
+            selectedStatuses.length !== 1 ||
+            selectedStatuses[0] !== "active"
+              ? "matching"
+              : "active"}{" "}
+            {memories.data?.total === 1 ? "memory" : "memories"}
           </span>
           <Link className="primary-button" href="/ingestion">
             Ingest interaction
@@ -128,18 +162,13 @@ export function MemoryExplorer() {
       </header>
 
       <section className="explorer-toolbar panel">
-        <form className="search-field" onSubmit={submitSearch} role="search">
-          <Search size={16} aria-hidden="true" />
-          <input
-            value={draftSearch}
-            onChange={(event) => setDraftSearch(event.target.value)}
-            placeholder="Search memory content or subject"
-            aria-label="Search memories"
-          />
-          <button type="submit" className="search-submit">
-            Search
-          </button>
-        </form>
+        <MemorySearch
+          key={`${appliedSearch}:${searchResetKey}`}
+          appliedSearch={appliedSearch}
+          onSearch={(search) =>
+            updateUrl({ search: search || null, cursor: null })
+          }
+        />
         <div className="toolbar-separator" />
         <div className="filter-group">
           <Filter size={14} aria-hidden="true" />
@@ -149,7 +178,7 @@ export function MemoryExplorer() {
               className={`filter-chip ${types.includes(type) ? "selected" : ""}`}
               type="button"
               key={type}
-              onClick={() => toggleFilter("type", type)}
+              onClick={() => toggleType(type)}
               aria-pressed={types.includes(type)}
             >
               {type}
@@ -159,12 +188,20 @@ export function MemoryExplorer() {
         <div className="filter-group">
           <SlidersHorizontal size={14} aria-hidden="true" />
           <span className="toolbar-label">Status</span>
-          {statuses.slice(0, 2).map((status) => (
+          <button
+            className={`filter-chip ${allStatuses ? "selected" : ""}`}
+            type="button"
+            onClick={() => updateUrl({ status: ["all"], cursor: null })}
+            aria-pressed={allStatuses}
+          >
+            All
+          </button>
+          {statuses.map((status) => (
             <button
               className={`filter-chip ${selectedStatuses.includes(status) ? "selected" : ""}`}
               type="button"
               key={status}
-              onClick={() => toggleFilter("status", status)}
+              onClick={() => toggleStatus(status)}
               aria-pressed={selectedStatuses.includes(status)}
             >
               {status}
@@ -176,7 +213,7 @@ export function MemoryExplorer() {
             className="clear-filters"
             type="button"
             onClick={() => {
-              setDraftSearch("");
+              setSearchResetKey((key) => key + 1);
               updateUrl({ search: null, type: [], status: [], cursor: null });
             }}
           >
@@ -192,7 +229,17 @@ export function MemoryExplorer() {
           onRetry={() => void memories.refetch()}
         />
       ) : null}
-      {memories.data ? <MemoryTable items={memories.data.items} /> : null}
+      {memories.data ? (
+        <MemoryList
+          items={memories.data.items}
+          asOf={asOf}
+          label={
+            selectedStatuses.length === 1 && selectedStatuses[0] === "active"
+              ? "Active memories"
+              : "Matching memories"
+          }
+        />
+      ) : null}
       {memories.data && memories.data.items.length === 0 ? (
         <EmptyState
           title="No memories match these filters"
@@ -205,7 +252,10 @@ export function MemoryExplorer() {
             className="secondary-button"
             type="button"
             disabled={!cursor}
-            onClick={() => updateUrl({ cursor: null })}
+            onClick={() => {
+              updateUrl({ cursor: cursorTrail.at(-1) || null });
+              setCursorTrail((trail) => trail.slice(0, -1));
+            }}
           >
             <ChevronLeft size={14} />
             Previous
@@ -217,9 +267,10 @@ export function MemoryExplorer() {
             className="secondary-button"
             type="button"
             disabled={!memories.data.page.next_cursor}
-            onClick={() =>
-              updateUrl({ cursor: memories.data.page.next_cursor })
-            }
+            onClick={() => {
+              setCursorTrail((trail) => [...trail, cursor || ""]);
+              updateUrl({ cursor: memories.data.page.next_cursor });
+            }}
           >
             Next
             <ChevronRight size={14} />
@@ -230,77 +281,135 @@ export function MemoryExplorer() {
   );
 }
 
-function MemoryTable({
-  items,
+function MemorySearch({
+  appliedSearch,
+  onSearch,
 }: {
-  items: Awaited<ReturnType<typeof getMemories>>["items"];
+  appliedSearch: string;
+  onSearch: (search: string) => void;
 }) {
+  const [draftSearch, setDraftSearch] = useState(appliedSearch);
   return (
-    <div className="panel memory-table-panel">
-      <div className="memory-table-wrap">
-        <table className="memory-table">
-          <thead>
-            <tr>
-              <th>Memory</th>
-              <th>Type</th>
-              <th>State</th>
-              <th>Importance</th>
-              <th>Confidence</th>
-              <th>Confirmed</th>
-              <th>Reinforced</th>
-            </tr>
-          </thead>
-          <tbody>
-            {items.map((memory) => (
-              <tr key={memory.id}>
-                <td>
-                  <Link
-                    className="memory-title-link"
-                    href={`/memories/${memory.id}`}
-                  >
-                    <strong>{memory.content}</strong>
-                    <span>
-                      {memory.subject || memory.context_key || "Unscoped fact"}
-                    </span>
-                  </Link>
-                </td>
-                <td>
-                  <TypeBadge type={memory.memory_type} />
-                </td>
-                <td>
-                  <StatusBadge status={memory.status} />
-                </td>
-                <td>
-                  <ScoreMeter value={memory.importance} />
-                </td>
-                <td>
-                  <ScoreMeter value={memory.confidence} />
-                </td>
-                <td>{formatDate(memory.last_confirmed_at)}</td>
-                <td>{memory.reinforcement_count}</td>
-              </tr>
-            ))}
-          </tbody>
-        </table>
-      </div>
-    </div>
+    <form
+      className="search-field"
+      role="search"
+      onSubmit={(event) => {
+        event.preventDefault();
+        const search = draftSearch.trim();
+        setDraftSearch(search);
+        onSearch(search);
+      }}
+    >
+      <Search size={16} aria-hidden="true" />
+      <input
+        value={draftSearch}
+        onChange={(event) => setDraftSearch(event.target.value)}
+        placeholder="Search text, subject, or context"
+        aria-label="Search memories"
+      />
+      <button type="submit" className="search-submit">
+        Search
+      </button>
+    </form>
   );
 }
 
-function ScoreMeter({ value }: { value: number }) {
+function MemoryList({
+  items,
+  asOf,
+  label,
+}: {
+  items: Awaited<ReturnType<typeof getMemories>>["items"];
+  asOf: number;
+  label: string;
+}) {
   return (
-    <span className="mini-score">
-      <span>
-        <i style={{ width: `${Math.round(value * 100)}%` }} />
-      </span>
-      <b>{value.toFixed(2)}</b>
-    </span>
+    <section className="panel memory-list-panel" aria-label={label}>
+      <div className="memory-list-heading">{label}</div>
+      <ul className="memory-list">
+        {items.map((memory) => {
+          const expired =
+            memory.status === "active" &&
+            memory.expires_at &&
+            Date.parse(memory.expires_at) <= asOf;
+          return (
+            <li
+              key={memory.id}
+              className="memory-list-item"
+              data-status={memory.status}
+            >
+              <Link
+                className="memory-list-link"
+                href={`/memories/${memory.id}`}
+              >
+                <div className="memory-list-copy">
+                  <strong>{memory.content}</strong>
+                  <span>
+                    {[memory.subject, memory.context_key]
+                      .filter(Boolean)
+                      .join(" · ") || "General context"}
+                  </span>
+                </div>
+                <div className="memory-list-signals">
+                  <div className="memory-list-badges">
+                    <TypeBadge type={memory.memory_type} />
+                    <span
+                      title={statusDescription(memory.status, Boolean(expired))}
+                    >
+                      <StatusBadge status={memory.status} />
+                    </span>
+                    {expired ? (
+                      <span className="memory-expired-note">
+                        Expired for recall
+                      </span>
+                    ) : null}
+                  </div>
+                  <div className="memory-list-facts">
+                    <span>
+                      <b>{Math.round(memory.confidence * 100)}%</b> confidence
+                    </span>
+                    <span>
+                      <b>{Math.round(memory.importance * 100)}%</b> importance
+                    </span>
+                    {memory.reinforcement_count > 0 ? (
+                      <span>
+                        {memory.reinforcement_count} reinforcement
+                        {memory.reinforcement_count === 1 ? "" : "s"}
+                      </span>
+                    ) : null}
+                    <time dateTime={memory.last_confirmed_at}>
+                      Confirmed {formatDate(memory.last_confirmed_at)}
+                    </time>
+                  </div>
+                </div>
+                <ChevronRight
+                  className="memory-list-chevron"
+                  size={16}
+                  aria-hidden="true"
+                />
+              </Link>
+            </li>
+          );
+        })}
+      </ul>
+    </section>
   );
+}
+
+function statusDescription(status: MemoryStatus, expired: boolean) {
+  if (expired) return "Validity ended; excluded from normal recall.";
+  return {
+    active: "Current memory available to normal recall.",
+    disputed: "Conflicting evidence needs review.",
+    superseded: "Historical memory replaced by the current memory.",
+    forgotten: "Excluded from normal recall.",
+  }[status];
 }
 
 function formatDate(value: string) {
   return new Intl.DateTimeFormat("en", {
     month: "short",
     day: "numeric",
+    year: "numeric",
   }).format(new Date(value));
 }

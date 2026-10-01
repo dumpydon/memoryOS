@@ -63,6 +63,7 @@ class RecallComparisonItem(ContractModel):
     memoryos_score: RecallScoreBreakdown
     rank_delta: int | None = None
     explanation: str = ""
+    movement_reason: str = ""
 
 
 class RecallComparisonResponse(ContractModel):
@@ -70,6 +71,7 @@ class RecallComparisonResponse(ContractModel):
     query: str
     evaluated_at: datetime
     policy_version: str
+    score_weights: dict[str, float]
     naive: list[RecallComparisonItem]
     memoryos: list[RecallComparisonItem]
     candidate_count: int = Field(ge=0)

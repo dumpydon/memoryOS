@@ -256,6 +256,71 @@ def test_reinforcement_is_once_per_interaction_and_history_preserves_versions(db
         assert [item.memory.version for item in history.versions] == [1, 2]
         assert history.versions[-1].is_current
         assert len(history.events) == 1
+        assert history.events[0].source_occurred_at == interaction.occurred_at
+
+
+def test_history_reads_missing_demo_quote_from_its_stored_interaction(db):
+    factory, scope_id = db
+    source = "Atlas prefers concise explanations for algorithms."
+    happened_at = datetime(2026, 9, 20, tzinfo=UTC)
+    with factory.begin() as session:
+        repo = MemoryRepository(session)
+        interaction = repo.insert_interaction(
+            scope_id=scope_id,
+            text=source,
+            occurred_at=happened_at,
+            idempotency_key="demo-source",
+            request_hash="demo-source-hash",
+        )
+        memory = repo.insert_memory(
+            scope_id=scope_id,
+            content=source,
+            memory_type=MemoryType.PREFERENCE,
+            importance=0.8,
+            confidence=0.9,
+            embedding=_vector(),
+            embedding_model="demo-fixture-v1",
+        )
+        repo.insert_event(
+            scope_id=scope_id,
+            memory_id=memory.record.id,
+            interaction_id=interaction.id,
+            event_type=MemoryEventType.CREATED,
+            reason_code="demo_seed",
+            reason_summary="Authored demo fixture.",
+            provenance="demo-fixture",
+        )
+        history = repo.get_history(scope_id=scope_id, memory_id=memory.record.id)
+        assert history is not None
+        assert history.events[0].evidence_excerpt == source
+        assert history.events[0].source_occurred_at == happened_at
+
+
+def test_memory_list_total_stays_stable_across_cursor_pages(db):
+    factory, scope_id = db
+    with factory.begin() as session:
+        repo = MemoryRepository(session)
+        for index in range(3):
+            repo.insert_memory(
+                scope_id=scope_id, content=f"Atlas pagination fact {index}",
+                memory_type=MemoryType.SEMANTIC, status=MemoryStatus.ACTIVE,
+                subject="Atlas", context_key="pagination", importance=0.8,
+                confidence=0.9, embedding=_vector(), embedding_model="demo-fixture-v1",
+            )
+        repo.insert_memory(
+            scope_id=scope_id, content="Atlas historical pagination fact",
+            memory_type=MemoryType.SEMANTIC, status=MemoryStatus.SUPERSEDED,
+            subject="Atlas", context_key="pagination", importance=0.8,
+            confidence=0.9, embedding=_vector(), embedding_model="demo-fixture-v1",
+        )
+        first = repo.list_memories(scope_id=scope_id, limit=2, statuses=[MemoryStatus.ACTIVE])
+        second = repo.list_memories(
+            scope_id=scope_id, limit=2, statuses=[MemoryStatus.ACTIVE],
+            cursor=first.page.next_cursor,
+        )
+        assert first.total == second.total == 3
+        assert len(first.items) == 2 and len(second.items) == 1
+        assert {item.id for item in first.items}.isdisjoint({item.id for item in second.items})
 
 
 def test_exact_pgvector_recall_filters_scope_mode_expiry_and_model(db):

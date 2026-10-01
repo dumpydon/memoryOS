@@ -17,7 +17,7 @@ from typing import Final
 from uuid import NAMESPACE_URL, UUID, uuid5
 
 from memoryos.contracts.demo import DemoCatalogResponse, DemoQuery, DemoScenario
-from memoryos.contracts.ingestion import CandidateMemory
+from memoryos.contracts.ingestion import AdmissionSignals, CandidateMemory
 from memoryos.domain.enums import MemoryRelation, MemoryStatus, MemoryType
 
 DEMO_SCOPE_ID: Final[UUID] = UUID("00000000-0000-0000-0000-000000000001")
@@ -390,6 +390,34 @@ _SEED_SPECS: tuple[SeedMemorySpec, ...] = (
         confirmed_days_ago=75,
     ),
     # Semantic knowledge (13 rows)
+    # Legacy-import fragments intentionally remain independent until ingestion
+    # validates consolidation; every outcome uses actual stored source rows.
+    _spec(
+        "pref-legacy-algorithms-a",
+        "Atlas prefers concise algorithm explanations.",
+        MemoryType.PREFERENCE,
+        subject="Atlas",
+        context="algorithms",
+        attribute="explanation-length",
+        importance=0.82,
+        confidence=0.96,
+        reinforcement_count=2,
+        effective_days_ago=14,
+        confirmed_days_ago=2,
+    ),
+    _spec(
+        "pref-legacy-algorithms-b",
+        "Atlas likes short, focused DSA explanations.",
+        MemoryType.PREFERENCE,
+        subject="Atlas",
+        context="algorithms",
+        attribute="explanation-style",
+        importance=0.85,
+        confidence=0.95,
+        reinforcement_count=1,
+        effective_days_ago=10,
+        confirmed_days_ago=3,
+    ),
     _spec(
         "semantic-api",
         "Atlas serves its public API with FastAPI.",
@@ -839,7 +867,7 @@ _SCENARIOS: tuple[DemoScenario, ...] = (
         id="demo-pref-style-dispute",
         title="Preserve an ambiguous conflict",
         description="Keep both versions when the correction evidence is ambiguous.",
-        text="Atlas might prefer a different response style.",
+        text="Atlas prefers paragraph answers without examples.",
         expected_outcome="disputed",
     ),
     DemoScenario(
@@ -866,6 +894,11 @@ _SCENARIOS: tuple[DemoScenario, ...] = (
 )
 
 _QUERIES: tuple[DemoQuery, ...] = (
+    DemoQuery(
+        id="demo-query-context-binary-search",
+        title="Binary search with memory",
+        query="Explain binary search to me.",
+    ),
     DemoQuery(
         id="demo-query-answer-style",
         title="Answer style",
@@ -957,14 +990,14 @@ _SCENARIO_CANDIDATES: dict[str, tuple[CandidateMemory, MemoryRelation]] = {
     "demo-pref-style-dispute": (
         CandidateMemory(
             candidate_id="demo:pref-style:dispute",
-            content="Atlas may prefer paragraph answers without examples.",
+            content="Atlas prefers paragraph answers without examples.",
             memory_type=MemoryType.PREFERENCE,
             subject="Atlas",
             context_key="answer-style",
             attribute_key="response-format",
             importance=0.75,
             confidence=0.86,
-            evidence_excerpt="might prefer a different response style",
+            evidence_excerpt="prefers paragraph answers without examples",
         ),
         MemoryRelation.DISPUTE,
     ),
@@ -1013,6 +1046,421 @@ _SCENARIO_CANDIDATES: dict[str, tuple[CandidateMemory, MemoryRelation]] = {
         MemoryRelation.SKIP,
     ),
 }
+
+# These labels are authored fixture data, never a classifier for arbitrary text.
+_FUTURE_VALUE = {
+    MemoryType.PREFERENCE: "personalization",
+    MemoryType.SEMANTIC: "reference",
+    MemoryType.PROCEDURAL: "procedure",
+    MemoryType.EPISODIC: "significant_event",
+}
+for _scenario_id, (_candidate, _relation) in list(_SCENARIO_CANDIDATES.items()):
+    _signals = AdmissionSignals.model_validate(
+        {
+            "durability": "lasting",
+            "future_value": _FUTURE_VALUE[_candidate.memory_type],
+            "specificity": "specific",
+            "evidence_source": "user",
+            "content_kind": "information",
+        }
+    )
+    if _scenario_id == "demo-skip-greeting":
+        _signals = _signals.model_copy(
+            update={
+                "durability": "transient",
+                "future_value": "none",
+                "content_kind": "acknowledgement",
+            }
+        )
+    _SCENARIO_CANDIDATES[_scenario_id] = (
+        _candidate.model_copy(update={"admission": _signals}),
+        _relation,
+    )
+
+
+def _negative_fixture(
+    identifier: str,
+    title: str,
+    text: str,
+    signals: AdmissionSignals,
+    *,
+    content: str | None = None,
+    memory_type: MemoryType = MemoryType.EPISODIC,
+) -> tuple[DemoScenario, CandidateMemory]:
+    return (
+        DemoScenario(
+            id=identifier,
+            title=title,
+            description="Preview why this input is not retained.",
+            text=text,
+            expected_outcome="skipped",
+        ),
+        CandidateMemory(
+            candidate_id=f"demo:admission:{identifier}",
+            content=content or text,
+            memory_type=memory_type,
+            importance=0.9,
+            confidence=0.99,
+            evidence_excerpt=text,
+            admission=signals,
+        ),
+    )
+
+
+_ACKNOWLEDGEMENT = AdmissionSignals(
+    durability="transient",
+    future_value="none",
+    specificity="specific",
+    evidence_source="user",
+    content_kind="acknowledgement",
+)
+_NEGATIVE_ADMISSION_FIXTURES = (
+    _negative_fixture(
+        "demo-reject-thanks", "Reject an acknowledgement · thanks", "thanks", _ACKNOWLEDGEMENT
+    ),
+    _negative_fixture(
+        "demo-reject-okay", "Reject an acknowledgement · okay", "okay", _ACKNOWLEDGEMENT
+    ),
+    _negative_fixture(
+        "demo-reject-temporary",
+        "Reject a one-off request",
+        "Explain this error once for this conversation.",
+        AdmissionSignals(
+            durability="transient",
+            future_value="none",
+            specificity="specific",
+            evidence_source="user",
+            content_kind="one_off_request",
+        ),
+        memory_type=MemoryType.PROCEDURAL,
+    ),
+    _negative_fixture(
+        "demo-reject-inference",
+        "Reject an unsupported inference",
+        "Atlas might prefer a different response style.",
+        AdmissionSignals(
+            durability="uncertain",
+            future_value="personalization",
+            specificity="vague",
+            evidence_source="inferred",
+            content_kind="information",
+        ),
+        content="Atlas prefers paragraph answers without examples.",
+        memory_type=MemoryType.PREFERENCE,
+    ),
+    _negative_fixture(
+        "demo-reject-assistant",
+        "Reject an assistant-generated claim",
+        "Assistant: Atlas uses MongoDB. The user has not confirmed this.",
+        AdmissionSignals(
+            durability="lasting",
+            future_value="reference",
+            specificity="specific",
+            evidence_source="assistant",
+            content_kind="information",
+        ),
+        content="Atlas uses MongoDB.",
+        memory_type=MemoryType.SEMANTIC,
+    ),
+    _negative_fixture(
+        "demo-reject-question",
+        "Reject a fact-free question",
+        "What time is it?",
+        AdmissionSignals(
+            durability="transient",
+            future_value="none",
+            specificity="vague",
+            evidence_source="user",
+            content_kind="question",
+        ),
+    ),
+    _negative_fixture(
+        "demo-reject-state",
+        "Reject temporary conversational state",
+        "I am tired right now.",
+        AdmissionSignals(
+            durability="transient",
+            future_value="none",
+            specificity="specific",
+            evidence_source="user",
+            content_kind="information",
+        ),
+    ),
+)
+for _scenario, _candidate in _NEGATIVE_ADMISSION_FIXTURES:
+    _SCENARIOS += (_scenario,)
+    _SCENARIO_CANDIDATES[_scenario.id] = (_candidate, MemoryRelation.SKIP)
+
+_FACT_TEXT = "Atlas stores memory event timestamps in UTC."
+_SCENARIOS += (
+    DemoScenario(
+        id="demo-fact-utc",
+        title="Remember a durable project fact",
+        description="A specific project fact with future reference value.",
+        text=_FACT_TEXT,
+        expected_outcome="created",
+    ),
+)
+_SCENARIO_CANDIDATES["demo-fact-utc"] = (
+    CandidateMemory(
+        candidate_id="demo:fact:utc",
+        content=_FACT_TEXT,
+        memory_type=MemoryType.SEMANTIC,
+        subject="Atlas",
+        context_key="persistence",
+        attribute_key="timestamp-zone",
+        importance=0.7,
+        confidence=0.96,
+        evidence_excerpt=_FACT_TEXT,
+        admission=AdmissionSignals(
+            durability="lasting",
+            future_value="reference",
+            specificity="specific",
+            evidence_source="user",
+            content_kind="information",
+        ),
+    ),
+    MemoryRelation.NEW,
+)
+
+# Focused relationship examples reuse existing seed preferences. Their final
+# outcomes are always validated against the current scoped memory snapshot.
+_RELATION_EXAMPLES = (
+    (
+        "demo-recall-correction-system-design",
+        "Keep system design separate",
+        "A context-specific correction can coexist with an algorithm preference.",
+        "For system design specifically, Atlas prefers detailed explanations with diagrams.",
+        "Atlas prefers detailed explanations with diagrams for system design.",
+        "system-design",
+        "explanation-style",
+        MemoryRelation.NEW,
+    ),
+    (
+        "demo-recall-correction-algorithms",
+        "Update algorithm explanations",
+        "An explicit correction to an algorithm explanation preference.",
+        (
+            "I switched from concise to detailed algorithm explanations for Atlas. "
+            "From now on, Atlas prefers detailed algorithm explanations with reasoning."
+        ),
+        "Atlas prefers detailed algorithm explanations with reasoning.",
+        "algorithms",
+        "explanation-style",
+        MemoryRelation.SUPERSEDE,
+    ),
+    (
+        "demo-recall-correction-python",
+        "Update example language",
+        "An explicit correction to the programming-language preference.",
+        (
+            "I switched from Python to TypeScript examples for Atlas. "
+            "From now on, Atlas prefers TypeScript examples for implementation questions."
+        ),
+        "Atlas prefers TypeScript examples for implementation questions.",
+        "examples",
+        "programming-language",
+        MemoryRelation.SUPERSEDE,
+    ),
+    (
+        "demo-consolidate-algorithms",
+        "Consolidate legacy algorithm preferences",
+        "Two stored legacy paraphrases express one preference; their evidence stays in history.",
+        "Atlas still prefers short, focused explanations for algorithms.",
+        "Atlas prefers short, focused algorithm explanations.",
+        "algorithms",
+        "explanation-style",
+        MemoryRelation.REINFORCE,
+    ),
+    (
+        "demo-feedback-paraphrase",
+        "Confirm a feedback preference",
+        "A paraphrase with compatible attribute labels.",
+        "Atlas still wants direct feedback with a concrete fix.",
+        "Atlas prefers direct feedback with a concrete fix.",
+        "collaboration",
+        "feedback-format",
+        MemoryRelation.REINFORCE,
+    ),
+    (
+        "demo-timezone-update",
+        "Replace a timezone preference",
+        "An explicit update to the existing scheduling preference.",
+        "From now on, Atlas wants meeting times shown in UTC instead of India Standard Time.",
+        "Atlas prefers meeting times shown in UTC.",
+        "scheduling",
+        "timezone",
+        MemoryRelation.SUPERSEDE,
+    ),
+    (
+        "demo-system-design-context",
+        "Keep a system-design preference separate",
+        "A different context can coexist with the general answer preference.",
+        "For system design, Atlas prefers detailed explanations with diagrams.",
+        "Atlas prefers detailed explanations with diagrams for system design.",
+        "system-design",
+        "response-format",
+        MemoryRelation.NEW,
+    ),
+    (
+        "demo-feedback-conflict",
+        "Review a conflicting feedback preference",
+        "Conflicting values without explicit replacement evidence.",
+        "Atlas prefers gentle feedback without a proposed fix.",
+        "Atlas prefers gentle feedback without a proposed fix.",
+        "collaboration",
+        "feedback-style",
+        MemoryRelation.DISPUTE,
+    ),
+)
+for (
+    _identifier,
+    _title,
+    _description,
+    _text,
+    _content,
+    _context,
+    _attribute,
+    _relation,
+) in _RELATION_EXAMPLES:
+    _SCENARIOS += (
+        DemoScenario(
+            id=_identifier,
+            title=_title,
+            description=_description,
+            text=_text,
+            expected_outcome=_relation.value,
+        ),
+    )
+    _SCENARIO_CANDIDATES[_identifier] = (
+        CandidateMemory(
+            candidate_id=f"demo:relationship:{_identifier}",
+            content=_content,
+            memory_type=MemoryType.PREFERENCE,
+            subject="Atlas",
+            context_key=_context,
+            attribute_key=_attribute,
+            importance=0.85,
+            confidence=0.95,
+            evidence_excerpt=_text,
+            admission=AdmissionSignals(
+                durability="lasting",
+                future_value="personalization",
+                specificity="specific",
+                evidence_source="user",
+                content_kind="information",
+            ),
+        ),
+        _relation,
+    )
+
+# One coherent, finite verification story. Relationship outcomes still depend
+# on the scoped snapshot and must pass the normal deterministic policies.
+_LIFECYCLE_EXAMPLES = (
+    (
+        "demo-lifecycle-create",
+        "Lifecycle · 1. Remember DSA preference",
+        "Begin the lifecycle with a durable preference for the demo subject.",
+        "For the lifecycle demo, I prefer concise explanations when learning algorithms.",
+        "Lifecycle demo prefers concise explanations when learning algorithms.",
+        "learning-algorithms",
+        "explanation-length",
+        MemoryRelation.NEW,
+    ),
+    (
+        "demo-lifecycle-reinforce",
+        "Lifecycle · 2. Confirm a paraphrase",
+        "Confirm the same preference with a compatible attribute label.",
+        "For the lifecycle demo, I still prefer short and focused explanations for DSA.",
+        "Lifecycle demo prefers short, focused explanations when learning algorithms.",
+        "learning-algorithms",
+        "explanation-style",
+        MemoryRelation.REINFORCE,
+    ),
+    (
+        "demo-lifecycle-replace",
+        "Lifecycle · 3. Replace DSA preference",
+        "An explicit replacement in the same DSA context.",
+        "For the lifecycle demo, I switched from concise to detailed DSA explanations. "
+        "From now on, I prefer detailed DSA explanations with reasoning.",
+        "Lifecycle demo prefers detailed DSA explanations with reasoning.",
+        "learning-algorithms",
+        "explanation-style",
+        MemoryRelation.SUPERSEDE,
+    ),
+    (
+        "demo-lifecycle-coexist",
+        "Lifecycle · 4. Keep system design separate",
+        "A separate context remains independently valid.",
+        "For the lifecycle demo, I prefer concise high-level explanations first for system design.",
+        "Lifecycle demo prefers concise high-level explanations first for system design.",
+        "system-design",
+        "explanation-style",
+        MemoryRelation.NEW,
+    ),
+    (
+        "demo-lifecycle-conflict",
+        "Lifecycle · 5. Review an ambiguous conflict",
+        "A conflicting DSA value with no replacement evidence.",
+        "For the lifecycle demo, I prefer concise DSA explanations.",
+        "Lifecycle demo prefers concise DSA explanations.",
+        "learning-algorithms",
+        "explanation-style",
+        MemoryRelation.DISPUTE,
+    ),
+)
+for (
+    _identifier,
+    _title,
+    _description,
+    _text,
+    _content,
+    _context,
+    _attribute,
+    _relation,
+) in _LIFECYCLE_EXAMPLES:
+    _SCENARIOS += (
+        DemoScenario(
+            id=_identifier,
+            title=_title,
+            description=_description,
+            text=_text,
+            expected_outcome=_relation.value,
+        ),
+    )
+    _SCENARIO_CANDIDATES[_identifier] = (
+        CandidateMemory(
+            candidate_id=f"demo:lifecycle:{_identifier}",
+            content=_content,
+            memory_type=MemoryType.PREFERENCE,
+            subject="Lifecycle demo",
+            context_key=_context,
+            attribute_key=_attribute,
+            importance=0.90,
+            confidence=0.97,
+            evidence_excerpt=_text,
+            admission=AdmissionSignals(
+                durability="lasting",
+                future_value="personalization",
+                specificity="specific",
+                evidence_source="user",
+                content_kind="information",
+            ),
+        ),
+        _relation,
+    )
+_QUERIES += (
+    DemoQuery(
+        id="demo-query-lifecycle-dsa",
+        title="Lifecycle DSA preference",
+        query="Lifecycle demo prefers detailed DSA explanations with reasoning.",
+    ),
+    DemoQuery(
+        id="demo-query-lifecycle-system-design",
+        title="Lifecycle system-design preference",
+        query="Lifecycle demo prefers concise high-level explanations first for system design.",
+    ),
+)
 
 _SCENARIO_BY_TEXT = {_normalize(scenario.text): scenario for scenario in _SCENARIOS}
 _RELATION_BY_CANDIDATE = {
@@ -1118,6 +1566,10 @@ def fixture_embeddings(texts: Sequence[str]) -> list[list[float]]:
     for text in texts:
         if _normalize(text) not in _KNOWN_FIXTURE_TEXTS:
             raise ValueError("unsupported demo input")
+        # Authored semantic vector for the recorded context example. Reuse the
+        # existing answer-style fixture; ranking and stored vectors stay unchanged.
+        if _normalize(text) == _normalize("Explain binary search to me."):
+            text = "Atlas wants short answers with one concrete example."
         vectors.append(_fixture_vector(text))
     return vectors
 

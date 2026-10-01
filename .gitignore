@@ -24,3 +24,4 @@ apps/web/out/
 apps/web/coverage/
 *.log
 *.tsbuildinfo
+.jev-runs/

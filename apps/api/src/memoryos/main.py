@@ -84,9 +84,12 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     )
     app.state.runtime = runtime
     app.state.mcp_server = getattr(mcp_app.state, "mcp_server", None)
+    cors_origins = [runtime_settings.web_origin]
+    if runtime_settings.app_env.casefold() not in {"production", "prod"}:
+        cors_origins.append("http://127.0.0.1:3000")
     app.add_middleware(
         CORSMiddleware,
-        allow_origins=[runtime_settings.web_origin, "http://127.0.0.1:3000"],
+        allow_origins=cors_origins,
         allow_credentials=True,
         allow_methods=["*"],
         allow_headers=["*"],

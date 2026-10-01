@@ -2,7 +2,7 @@
 
 from functools import lru_cache
 
-from pydantic import Field
+from pydantic import Field, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -20,6 +20,8 @@ class Settings(BaseSettings):
     api_host: str = "0.0.0.0"
     api_port: int = Field(default=8000, ge=1, le=65535)
     web_origin: str = "http://localhost:3000"
+    api_public_origin: str | None = None
+    render_external_url: str | None = None
     database_url: str = "postgresql+psycopg://memoryos:memoryos@localhost:5432/memoryos"
     owner_api_token: str = "memoryos-local-token"
 
@@ -32,6 +34,16 @@ class Settings(BaseSettings):
     demo_embedding_dimensions: int = Field(default=1536, ge=1)
     provider_timeout_seconds: float = Field(default=30.0, gt=0)
     max_interaction_chars: int = Field(default=20_000, ge=100, le=100_000)
+
+    @field_validator("database_url")
+    @classmethod
+    def use_psycopg_driver(cls, value: str) -> str:
+        # Hosted providers supply ordinary PostgreSQL URLs. Keep their encoded
+        # credentials and TLS query untouched while selecting our installed driver.
+        for prefix in ("postgresql://", "postgres://"):
+            if value.startswith(prefix):
+                return "postgresql+psycopg://" + value[len(prefix) :]
+        return value
 
 
 @lru_cache(maxsize=1)

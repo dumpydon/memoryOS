@@ -28,6 +28,7 @@ export type IngestInteractionResponse =
 export type RecallScoreBreakdown =
   components["schemas"]["RecallScoreBreakdown"];
 export type RecallItem = components["schemas"]["RecallItem"];
+export type ContextResponse = components["schemas"]["ContextResponse"];
 export type RecallComparisonItem =
   components["schemas"]["RecallComparisonItem"];
 export type RecallComparisonResponse =
@@ -38,7 +39,8 @@ export type ResolveMemoryResponse =
   components["schemas"]["ResolveMemoryResponse"];
 export type CapabilitiesResponse =
   components["schemas"]["CapabilitiesResponse"];
-export type ReviewAction = components["schemas"]["ResolveReviewRequest"]["action"];
+export type ReviewAction =
+  components["schemas"]["ResolveReviewRequest"]["action"];
 export type ReviewStatus = "pending" | "resolved";
 export type ReviewItem = components["schemas"]["ReviewItem"];
 export type ReviewListResponse = components["schemas"]["ReviewListResponse"];

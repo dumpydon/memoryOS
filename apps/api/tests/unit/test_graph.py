@@ -65,3 +65,21 @@ def test_related_snapshot_without_rows_skips_second_structured_call() -> None:
     )
     graph.invoke({"stage_timings": {}}, config={"recursion_limit": 12})
     assert visited == ["extract", "embed", "find_related", "validate_plan", "persist"]
+
+
+def test_rejected_extraction_bypasses_embedding_even_when_candidates_exist():
+    visited = []
+
+    def node(name):
+        def run(state):
+            visited.append(name)
+            if name == "extract":
+                return {"candidates": ["rejected"], "admitted_candidates": []}
+            return {}
+
+        return run
+
+    names = ("extract", "embed", "find_related", "assess_relations", "validate_plan", "persist")
+    graph = build_ingestion_graph(nodes={name: node(name) for name in names})
+    graph.invoke({"stage_timings": {}}, config={"recursion_limit": 12})
+    assert visited == ["extract", "validate_plan", "persist"]

@@ -5,6 +5,7 @@ import { IngestionSessionProvider } from "@/components/ingestion-session-context
 import { ThemeProvider } from "@/components/theme-provider";
 import { WorkspaceProvider } from "@/components/workspace-context";
 import { WorkspaceMain } from "@/components/workspace-main";
+import { memoryMark } from "@/lib/brand";
 import Link from "next/link";
 
 export function AppShell({ children }: { children: React.ReactNode }) {
@@ -78,11 +79,17 @@ export function AppShell({ children }: { children: React.ReactNode }) {
               <div className="app-frame">
                 <aside className="sidebar">
                   <div className="brand-lockup">
-                    <div className="brand-mark" aria-hidden="true">
-                      <span />
-                      <span />
-                      <span />
-                    </div>
+                    <svg
+                      className="brand-mark"
+                      viewBox={memoryMark.viewBox}
+                      width="28"
+                      height="28"
+                      aria-hidden="true"
+                      focusable="false"
+                    >
+                      <path className="brand-mark-trace" d={memoryMark.paths[0]} />
+                      <path d={memoryMark.paths[1]} />
+                    </svg>
                     <div>
                       <div className="brand-name">MemoryOS</div>
                       <div className="brand-caption">agent memory layer</div>

@@ -9,6 +9,8 @@ from fastapi import APIRouter, Query, Request
 
 from memoryos.api.auth import AccessContext, authorize_request
 from memoryos.contracts.capabilities import CapabilitiesResponse
+from memoryos.contracts.context import ContextRequest, ContextResponse
+from memoryos.contracts.correction import CorrectionRequest
 from memoryos.contracts.demo import DemoCatalogResponse
 from memoryos.contracts.ingestion import IngestInteractionRequest, IngestInteractionResponse
 from memoryos.contracts.memory import (
@@ -131,6 +133,38 @@ def get_interaction(
     )
 
 
+@router.post("/memories/{memory_id}/correct", response_model=IngestInteractionResponse)
+def correct_memory(
+    memory_id: UUID, payload: CorrectionRequest, request: Request
+) -> IngestInteractionResponse:
+    runtime = _runtime(request)
+    access = _authorize_scope(
+        request, runtime, scope_id=payload.scope_id, mode=payload.mode, mutation=not payload.preview
+    )
+    if access.is_public_demo and not is_allowed_demo_scenario(payload.text):
+        raise ServiceError("demo_input_not_allowed", "Demo corrections use the recorded examples.")
+    response = _ingestion_service(runtime).ingest(
+        IngestInteractionRequest(
+            scope_id=payload.scope_id,
+            text=payload.text,
+            mode=payload.mode,
+            preview=payload.preview,
+            idempotency_key=payload.idempotency_key,
+            correction_memory_id=memory_id,
+            expected_scope_revision=payload.expected_scope_revision,
+            reviewed_decisions=payload.reviewed_decisions,
+            reviewed_targets=payload.reviewed_targets,
+            source_ref="Recall Lab correction",
+            metadata={"correction_memory_id": str(memory_id)},
+        )
+    )
+    can_commit = access.is_owner and (
+        payload.mode is ExecutionMode.LIVE
+        or runtime.settings.app_env.casefold() not in {"production", "prod"}
+    )
+    return response.model_copy(update={"correction_commit_allowed": can_commit})
+
+
 @router.get("/memories", response_model=MemoryListResponse)
 def list_memories(
     request: Request,
@@ -225,6 +259,15 @@ def compare_recall(payload: RecallRequest, request: Request) -> RecallComparison
     return runtime.query.compare(payload)
 
 
+@router.post("/recall/context", response_model=ContextResponse)
+def recall_in_context(payload: ContextRequest, request: Request) -> ContextResponse:
+    from memoryos.services.context import RecallContextService
+
+    runtime = _runtime(request)
+    _authorize_scope(request, runtime, scope_id=payload.scope_id, mode=payload.mode)
+    return RecallContextService(runtime.settings, runtime.query).answer(payload)
+
+
 @router.get("/overview", response_model=OverviewResponse)
 def overview(scope_id: UUID, request: Request) -> OverviewResponse:
     runtime = _runtime(request)
@@ -271,9 +314,7 @@ def propose_consolidation(payload: ConsolidationRequest, request: Request) -> Re
     from memoryos.services.consolidation import MemoryConsolidationService
 
     runtime = _runtime(request)
-    _authorize_scope(
-        request, runtime, scope_id=payload.scope_id, mode=payload.mode, mutation=True
-    )
+    _authorize_scope(request, runtime, scope_id=payload.scope_id, mode=payload.mode, mutation=True)
     return MemoryConsolidationService(runtime.settings, runtime.session_factory).propose(payload)
 
 

@@ -3,6 +3,9 @@
   "version": "0.2.0",
   "private": true,
   "packageManager": "pnpm@11.19.0",
+  "engines": {
+    "node": "22.x"
+  },
   "scripts": {
     "setup": "node scripts/local-dev.mjs setup",
     "dev": "node scripts/local-dev.mjs prepare && concurrently --kill-others-on-fail --names api,web --prefix \"[{name}]\" \"cd apps/api && exec uv run --no-sync uvicorn memoryos.main:app --reload --host 0.0.0.0 --port 8000\" \"exec pnpm --dir apps/web dev\"",

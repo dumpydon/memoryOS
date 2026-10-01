@@ -26,7 +26,8 @@ def validate_security_settings(settings: Settings) -> None:
     """Reject the development token when an app is explicitly production."""
 
     if settings.app_env.casefold() in {"production", "prod"} and (
-        not settings.owner_api_token or settings.owner_api_token == DEFAULT_OWNER_TOKEN
+        not settings.owner_api_token.strip()
+        or settings.owner_api_token.strip() == DEFAULT_OWNER_TOKEN
     ):
         raise RuntimeError("OWNER_API_TOKEN must be configured in production")
 

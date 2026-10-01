@@ -1,15 +1,8 @@
 "use client";
 
-import {
-  useMutation,
-  useQuery,
-  useQueryClient,
-  type QueryClient,
-  type QueryKey,
-} from "@tanstack/react-query";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   ArrowRight,
-  ArrowUpRight,
   BrainCircuit,
   Check,
   CheckCircle2,
@@ -45,7 +38,12 @@ import {
   getDemoCatalog,
   postInteraction,
 } from "@/lib/api/queries";
-import type { DemoScenario, IngestInteractionResponse } from "@/lib/api/types";
+import { refreshIngestionCaches } from "@/lib/api/cache";
+import type {
+  DemoScenario,
+  IngestDecision,
+  IngestInteractionResponse,
+} from "@/lib/api/types";
 
 type Feedback = {
   title: string;
@@ -149,7 +147,7 @@ export function IngestionPlayground() {
         token,
       );
       if (!preview) {
-        refreshIngestionCaches(queryClient, response, scopeId, mode);
+        await refreshIngestionCaches(queryClient, response);
       }
       return response;
     },
@@ -362,12 +360,6 @@ export function IngestionPlayground() {
               commit; preview never persists a memory.
             </div>
           )}
-          {selectedScenario ? (
-            <div className="expected-outcome">
-              <span className="eyebrow">Expected policy outcome</span>
-              <p>{selectedScenario.expected_outcome}</p>
-            </div>
-          ) : null}
           <div className="editor-actions">
             <button
               className={`secondary-button ingestion-action-button${ingest.isPending && ingest.variables?.preview ? " processing" : ""}`}
@@ -457,48 +449,6 @@ export function IngestionPlayground() {
   );
 }
 
-function refreshIngestionCaches(
-  queryClient: QueryClient,
-  response: IngestInteractionResponse,
-  scopeId: string,
-  mode: IngestInteractionResponse["mode"],
-) {
-  const affectedMemoryIds = new Set(
-    response.memory_ids.map((memoryId) => String(memoryId)),
-  );
-  response.decisions.forEach((decision) => {
-    if (decision.memory_id) affectedMemoryIds.add(String(decision.memory_id));
-    if (decision.related_memory_id) {
-      affectedMemoryIds.add(String(decision.related_memory_id));
-    }
-  });
-
-  const staleKeys: QueryKey[] = [
-    ["memories"],
-    ["review-memory-pool", scopeId, mode],
-  ];
-  affectedMemoryIds.forEach((memoryId) => {
-    staleKeys.push(
-      ["memory", scopeId, memoryId],
-      ["memory-history", scopeId, memoryId],
-    );
-  });
-  const hasReviewImpact = response.decisions.some(
-    (decision) => decision.decision_type === "disputed",
-  );
-  if (hasReviewImpact) {
-    staleKeys.push(["reviews", scopeId, mode]);
-  }
-
-  for (const queryKey of staleKeys) {
-    void queryClient.invalidateQueries({ queryKey, refetchType: "none" });
-  }
-  void queryClient.invalidateQueries({
-    queryKey: ["overview", scopeId, mode],
-    refetchType: "active",
-  });
-}
-
 const processingStages = [
   {
     label: "Analyzing interaction",
@@ -506,13 +456,13 @@ const processingStages = [
     icon: Sparkles,
   },
   {
-    label: "Extracting candidates",
-    detail: "Finding atomic memory signals",
+    label: "Extracting and screening",
+    detail: "Checking evidence and future usefulness",
     icon: BrainCircuit,
   },
   {
-    label: "Embedding candidates",
-    detail: "Preparing semantic vectors",
+    label: "Embedding admitted candidates",
+    detail: "Rejected candidates bypass this step",
     icon: Layers3,
   },
   {
@@ -675,12 +625,28 @@ function feedbackForResult(
   preview: boolean,
 ): Feedback {
   const actionable = result.decisions.filter((decision) =>
-    ["created", "reinforced", "superseded", "disputed"].includes(
-      decision.decision_type,
-    ),
+    [
+      "created",
+      "reinforced",
+      "superseded",
+      "disputed",
+      "consolidated",
+    ].includes(decision.decision_type),
   );
   if (preview) {
     if (actionable.length === 0) {
+      if (
+        result.decisions.some(
+          (item) => item.reason_code === "pending_conflict_already_represented",
+        )
+      ) {
+        return {
+          title: "Already in Memory Review",
+          message:
+            "This information is part of an unresolved conflict. No database changes were made.",
+          tone: "info",
+        };
+      }
       return {
         title: "Analysis complete",
         message:
@@ -688,12 +654,10 @@ function feedbackForResult(
         tone: "info",
       };
     }
-    const count = result.candidates.filter(
-      (candidate) => candidate.worth_remembering,
-    ).length;
+    const count = actionable.length;
     return {
       title: "Analysis complete",
-      message: `MemoryOS found ${count || actionable.length} potential memor${count === 1 ? "y" : "ies"}. No database changes were made.`,
+      message: `${count} memory decision${count === 1 ? "" : "s"} recommended. No database changes were made.`,
       tone: "info",
     };
   }
@@ -750,22 +714,45 @@ function feedbackForResult(
 
 function humanSummaryForResult(result: IngestInteractionResponse) {
   const actionable = result.decisions.filter((decision) =>
-    ["created", "reinforced", "superseded", "disputed"].includes(
-      decision.decision_type,
-    ),
+    [
+      "created",
+      "reinforced",
+      "superseded",
+      "disputed",
+      "consolidated",
+    ].includes(decision.decision_type),
   );
   if (result.status === "preview") {
     if (actionable.length === 0) {
+      if (
+        result.decisions.some(
+          (item) => item.reason_code === "pending_conflict_already_represented",
+        )
+      ) {
+        return {
+          headline: "Already in Memory Review",
+          detail:
+            "This information is part of an unresolved conflict. Preview made no database changes.",
+        };
+      }
       return {
-        headline: "No memory change recommended",
-        detail:
-          "MemoryOS found no supported durable signal strong enough to change the current memory set.",
+        headline: "Nothing worth remembering",
+        detail: result.trace.steps.some((step) => step.node === "embed")
+          ? "No safe memory change is recommended. Preview made no database changes."
+          : "Rejected before embedding. Preview made no database changes.",
       };
     }
     const action = humanAction(actionable[0].decision_type);
+    const onlyReinforcement = actionable.every(
+      (item) => item.decision_type === "reinforced",
+    );
     return {
-      headline: `MemoryOS found ${actionable.length} potential memor${actionable.length === 1 ? "y" : "ies"}`,
-      detail: `Proposed action: ${action}. Preview is complete and nothing was written to the database.`,
+      headline: onlyReinforcement
+        ? "Already represented in memory"
+        : `${actionable.length} candidate${actionable.length === 1 ? "" : "s"} admitted`,
+      detail: onlyReinforcement
+        ? "This interaction can reinforce existing memory without creating a duplicate. Nothing was written."
+        : `Proposed action: ${action}. Preview made no database changes.`,
     };
   }
   if (actionable.length === 0) {
@@ -788,6 +775,8 @@ function humanAction(decisionType: string) {
   return (
     {
       created: "Create a new memory",
+      consolidated:
+        "Consolidate equivalent memories and preserve their sources",
       reinforced: "Reinforce an existing memory",
       superseded: "Replace an older memory version",
       disputed: "Send the conflict to Memory Review",
@@ -796,6 +785,8 @@ function humanAction(decisionType: string) {
 }
 
 function humanCommitHeadline(decisionTypes: string[]) {
+  if (decisionTypes.includes("consolidated"))
+    return "Equivalent memories consolidated";
   if (decisionTypes.includes("disputed") && decisionTypes.length === 1) {
     return "Conflict sent to Memory Review";
   }
@@ -804,6 +795,62 @@ function humanCommitHeadline(decisionTypes: string[]) {
   if (decisionTypes.includes("superseded"))
     return "Memory updated with a newer version";
   return "Interaction processed";
+}
+
+function admissionOutcome(decision: IngestDecision | undefined) {
+  if (!decision)
+    return {
+      label: "Rejected",
+      tone: "rejected",
+      reason: "No validated decision is available.",
+    };
+  switch (decision.decision_type) {
+    case "consolidated":
+      return {
+        label: "Consolidates",
+        tone: "accepted",
+        reason: decision.reason_summary,
+      };
+    case "created":
+      return {
+        label:
+          decision.reason_code === "contextual_coexistence"
+            ? "Coexists"
+            : "New memory",
+        tone: "accepted",
+        reason: decision.reason_summary,
+      };
+    case "reinforced":
+      return {
+        label: "Reinforcement",
+        tone: "reinforced",
+        reason: decision.reason_summary,
+      };
+    case "superseded":
+      return {
+        label: "Supersedes",
+        tone: "accepted",
+        reason: decision.reason_summary,
+      };
+    case "disputed":
+      return {
+        label: "Needs review",
+        tone: "review",
+        reason: decision.reason_summary,
+      };
+    default:
+      return {
+        label:
+          decision.reason_code === "pending_conflict_already_represented"
+            ? "Needs review"
+            : "Rejected",
+        tone:
+          decision.reason_code === "pending_conflict_already_represented"
+            ? "review"
+            : "rejected",
+        reason: decision.reason_summary,
+      };
+  }
 }
 
 function IngestionResult({ result }: { result: IngestInteractionResponse }) {
@@ -868,79 +915,129 @@ function IngestionResult({ result }: { result: IngestInteractionResponse }) {
       <div className="panel candidates-panel">
         <div className="panel-heading">
           <div>
-            <span className="eyebrow">Structured extraction</span>
-            <h2>Candidates</h2>
+            <span className="eyebrow">Extracted information</span>
+            <h2>Memory decisions</h2>
           </div>
         </div>
         <div className="candidate-list">
           {result.candidates.length ? (
-            result.candidates.map((candidate) => (
-              <div className="candidate-card" key={candidate.candidate_id}>
-                <div className="candidate-card-top">
-                  <TypeBadge type={candidate.memory_type} />
-                  <span className="candidate-confidence">
-                    confidence {candidate.confidence.toFixed(2)}
-                  </span>
+            result.candidates.map((candidate) => {
+              const decision = result.decisions.find(
+                (item) => item.candidate_id === candidate.candidate_id,
+              );
+              const outcome = admissionOutcome(decision);
+              const relation = result.relation_assessments.find(
+                (item) => item.candidate_id === candidate.candidate_id,
+              );
+              const showEvidence =
+                candidate.evidence_excerpt.trim().toLowerCase() !==
+                candidate.content.trim().toLowerCase();
+              return (
+                <div className="candidate-card" key={candidate.candidate_id}>
+                  <div className="candidate-card-top">
+                    {!candidate.admission ||
+                    candidate.admission.content_kind === "information" ? (
+                      <TypeBadge type={candidate.memory_type} />
+                    ) : null}
+                    <span className={`candidate-admission ${outcome.tone}`}>
+                      {outcome.label}
+                    </span>
+                  </div>
+                  <strong>{candidate.content}</strong>
+                  <p className="candidate-decision-reason">{outcome.reason}</p>
+                  {showEvidence ? (
+                    <p className="candidate-evidence">
+                      “{candidate.evidence_excerpt}”
+                    </p>
+                  ) : null}
+                  <details className="candidate-policy-details">
+                    <summary>Policy details</summary>
+                    <div className="candidate-scores">
+                      <span>
+                        Importance <b>{candidate.importance.toFixed(2)}</b>
+                      </span>
+                      <span>
+                        Confidence <b>{candidate.confidence.toFixed(2)}</b>
+                      </span>
+                    </div>
+                    {candidate.admission ? (
+                      <p className="candidate-policy-signals">
+                        {[
+                          `Durability: ${candidate.admission.durability}`,
+                          `Future use: ${candidate.admission.future_value.replaceAll("_", " ")}`,
+                          `Specificity: ${candidate.admission.specificity}`,
+                          `Evidence: ${candidate.admission.evidence_source}`,
+                        ].join(" · ")}
+                      </p>
+                    ) : null}
+                    {relation ? (
+                      <>
+                        <p className="candidate-policy-signals">
+                          Proposed: {relation.relation} · Values:{" "}
+                          {relation.value_comparison} · Relation confidence:{" "}
+                          {relation.confidence.toFixed(2)}
+                        </p>
+                        {relation.related_memory_id ? (
+                          <Link
+                            href={`/memories/${relation.related_memory_id}`}
+                          >
+                            Inspect related memory <ArrowRight size={11} />
+                          </Link>
+                        ) : null}
+                        {relation.replacement_evidence ? (
+                          <p className="candidate-policy-signals">
+                            Replacement evidence: “
+                            {relation.replacement_evidence}”
+                          </p>
+                        ) : null}
+                      </>
+                    ) : null}
+                    {decision?.canonical_content ? (
+                      <p className="candidate-policy-signals">
+                        Canonical statement: “{decision.canonical_content}”
+                      </p>
+                    ) : null}
+                    {decision?.source_memory_ids?.length ? (
+                      <p className="candidate-policy-signals">
+                        Preserved sources:{" "}
+                        {decision.source_memory_ids.map((id, index) => (
+                          <Link key={id} href={`/memories/${id}`}>
+                            {" "}
+                            {index + 1}{" "}
+                          </Link>
+                        ))}
+                      </p>
+                    ) : null}
+                    {decision?.consolidation_note ? (
+                      <p className="candidate-policy-signals">
+                        {decision.consolidation_note}
+                      </p>
+                    ) : null}
+                    {decision && decision.reason_summary !== outcome.reason ? (
+                      <p className="candidate-policy-signals">
+                        {decision.reason_summary}
+                      </p>
+                    ) : null}
+                    <code>{decision?.reason_code || "decision_missing"}</code>
+                  </details>
                 </div>
-                <strong>{candidate.content}</strong>
-                <p>“{candidate.evidence_excerpt}”</p>
-                <div className="candidate-scores">
-                  <span>
-                    extracted importance{" "}
-                    <b>{candidate.importance.toFixed(2)}</b>
-                  </span>
-                  <span>
-                    {candidate.worth_remembering
-                      ? "eligible to remember"
-                      : candidate.skip_reason || "skipped"}
-                  </span>
-                </div>
-              </div>
-            ))
+              );
+            })
           ) : (
             <div className="empty-panel">
-              No memory candidates were extracted.
+              <span className="candidate-admission rejected">Rejected</span>
+              <p>
+                {result.decisions[0]?.reason_summary ||
+                  "No supported durable information was extracted."}
+              </p>
             </div>
           )}
         </div>
       </div>
-      <div className="panel decisions-panel">
-        <div className="panel-heading">
-          <div>
-            <span className="eyebrow">Policy decisions</span>
-            <h2>What changed</h2>
-          </div>
-        </div>
-        <div className="decision-list">
-          {result.decisions.length ? (
-            result.decisions.map((decision, index) => (
-              <div
-                className="decision-row"
-                key={`${decision.candidate_id}-${index}`}
-              >
-                <span className={`decision-icon ${decision.decision_type}`}>
-                  <DecisionIcon type={decision.decision_type} />
-                </span>
-                <div>
-                  <strong>{decision.decision_type}</strong>
-                  <p>{decision.reason_summary}</p>
-                </div>
-              </div>
-            ))
-          ) : (
-            <div className="empty-panel">
-              No persistence decision was necessary.
-            </div>
-          )}
-        </div>
-      </div>
-      <div className="panel graph-trace">
-        <div className="panel-heading">
-          <div>
-            <span className="eyebrow">Execution trace</span>
-            <h2>{result.trace.policy_version}</h2>
-          </div>
-        </div>
+      <details className="panel graph-trace ingestion-execution-details">
+        <summary>
+          Execution details <span>{result.trace.policy_version}</span>
+        </summary>
         <div className="trace-timeline">
           {result.trace.steps.map((step, index) => (
             <div className="trace-timeline-item" key={step.node}>
@@ -957,7 +1054,7 @@ function IngestionResult({ result }: { result: IngestInteractionResponse }) {
             </div>
           ))}
         </div>
-      </div>
+      </details>
     </div>
   );
 }
@@ -968,7 +1065,9 @@ function resultCompletionTone(
   if (result.status === "preview") return "preview";
   if (
     result.decisions.some((decision) =>
-      ["created", "reinforced", "superseded"].includes(decision.decision_type),
+      ["created", "reinforced", "superseded", "consolidated"].includes(
+        decision.decision_type,
+      ),
     )
   ) {
     return "success";
@@ -1001,18 +1100,10 @@ function ResultStatusGlyph({
   );
 }
 
-function DecisionIcon({ type }: { type: string }) {
-  if (type === "reinforced") return <GitBranch size={13} />;
-  if (type === "superseded") return <ArrowUpRight size={13} />;
-  if (type === "disputed") return <ShieldAlert size={13} />;
-  if (type === "skipped" || type === "rejected") return <Minus size={13} />;
-  return <Check size={13} />;
-}
-
 function traceLabel(node: string) {
   return (
     {
-      extract: "Extract",
+      extract: "Extract & screen",
       embed: "Embed",
       find_related: "Find related",
       assess_relations: "Assess",

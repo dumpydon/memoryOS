@@ -93,7 +93,11 @@ def build_ingestion_graph(
     graph.add_edge(START, "extract")
     graph.add_conditional_edges(
         "extract",
-        lambda state: "embed" if state.get("candidates") else "validate_plan",
+        lambda state: (
+            "embed"
+            if state.get("admitted_candidates", state.get("candidates"))
+            else "validate_plan"
+        ),
         {"embed": "embed", "validate_plan": "validate_plan"},
     )
     graph.add_edge("embed", "find_related")

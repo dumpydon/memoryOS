@@ -12,7 +12,7 @@ from memoryos.config import Settings
 from memoryos.contracts.ingestion import CandidateMemory, RelationAssessment
 from memoryos.contracts.memory import MemoryRecord
 from memoryos.domain.enums import MemoryRelation, MemoryStatus
-from memoryos.domain.policies import normalize_text
+from memoryos.domain.policies import _compatible_attribute_key, normalize_text
 from memoryos.providers.errors import (
     ProviderError,
     ProviderOutputInvalid,
@@ -73,12 +73,12 @@ def _validate_vectors(
 def _same_target(candidate: CandidateMemory, memory: MemoryRecord) -> bool:
     if candidate.memory_type is not memory.memory_type:
         return False
-    for field in ("subject", "context_key", "attribute_key"):
+    for field in ("subject",):
         candidate_value = normalize_text(getattr(candidate, field) or "")
         memory_value = normalize_text(getattr(memory, field) or "")
         if not candidate_value or not memory_value or candidate_value != memory_value:
             return False
-    return True
+    return _compatible_attribute_key(candidate.attribute_key, memory.attribute_key)
 
 
 @dataclass(slots=True)
@@ -119,7 +119,17 @@ class DemoStructuredProvider:
 
     model_name: str = "demo-fixtures"
 
-    def extract_candidates(self, *, text: str) -> list[CandidateMemory]:
+    def generate_answer(self, *, query: str, memory_context: str) -> str:
+        from memoryos.seed.context import recorded_context_answer
+
+        try:
+            return recorded_context_answer(query, memory_context)
+        except ValueError as exc:
+            raise UnsupportedDemoInput("unsupported demo input") from exc
+
+    def extract_candidates(
+        self, *, text: str, reference_memory: MemoryRecord | None = None
+    ) -> list[CandidateMemory]:
         if not isinstance(text, str) or len(text) > self.settings.max_interaction_chars:
             raise ProviderOutputInvalid("interaction text exceeds the provider input bound")
         try:
@@ -147,6 +157,7 @@ class DemoStructuredProvider:
         candidates: Sequence[CandidateMemory],
         related_memories: Sequence[MemoryRecord],
         source_text: str | None = None,
+        reference_memory: MemoryRecord | None = None,
     ) -> list[RelationAssessment]:
         if len(candidates) > MAX_CANDIDATES or len(related_memories) > MAX_RELATED_MEMORIES:
             raise ProviderOutputInvalid("demo relation input exceeds the provider bound")
@@ -175,6 +186,13 @@ class DemoStructuredProvider:
                     for memory in sorted(
                         related_memories,
                         key=lambda item: (
+                            0
+                            if reference_memory is not None and item.id == reference_memory.id
+                            else 1,
+                            0
+                            if normalize_text(item.context_key or "")
+                            == normalize_text(candidate.context_key or "")
+                            else 1,
                             0 if item.status is MemoryStatus.ACTIVE else 1,
                             str(item.id),
                         ),
@@ -187,17 +205,11 @@ class DemoStructuredProvider:
             if target is None and relation in {
                 MemoryRelation.SUPERSEDE,
                 MemoryRelation.DISPUTE,
+                MemoryRelation.REINFORCE,
             }:
                 relation = MemoryRelation.NEW
             related_id = (
-                target.id
-                if target is not None
-                and relation
-                not in {
-                    MemoryRelation.NEW,
-                    MemoryRelation.SKIP,
-                }
-                else None
+                target.id if target is not None and relation is not MemoryRelation.SKIP else None
             )
             results.append(
                 RelationAssessment(
@@ -220,6 +232,26 @@ class DemoStructuredProvider:
                             )
                         )
                     ),
+                    value_comparison=(
+                        "equivalent"
+                        if relation is MemoryRelation.REINFORCE
+                        else "incompatible"
+                        if relation in {MemoryRelation.SUPERSEDE, MemoryRelation.DISPUTE}
+                        else "distinct"
+                    ),
+                    replacement_evidence=source_text
+                    if relation is MemoryRelation.SUPERSEDE
+                    else None,
+                    consolidation_source_ids=[
+                        memory.id
+                        for memory in related_memories
+                        if memory.status is MemoryStatus.ACTIVE
+                        and _same_target(candidate, memory)
+                        and normalize_text(memory.context_key or "")
+                        == normalize_text(candidate.context_key or "")
+                    ]
+                    if candidate.candidate_id == "demo:relationship:demo-consolidate-algorithms"
+                    else [],
                 )
             )
         return results

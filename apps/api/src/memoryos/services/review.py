@@ -7,7 +7,6 @@ only allowlisted lifecycle changes inside one scope revision transaction.
 
 from __future__ import annotations
 
-import math
 import uuid
 from collections.abc import Callable
 from contextlib import AbstractContextManager
@@ -15,7 +14,7 @@ from datetime import UTC, datetime
 from typing import Any, cast
 from uuid import UUID
 
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import Session, sessionmaker
 
@@ -34,7 +33,7 @@ from memoryos.db.errors import (
     ScopeRevisionConflict,
 )
 from memoryos.db.models import Memory, MemoryReview
-from memoryos.db.repositories import VECTOR_DIMENSIONS, MemoryRepository
+from memoryos.db.repositories import MemoryRepository
 from memoryos.domain.enums import (
     ExecutionMode,
     MemoryEventType,
@@ -48,7 +47,7 @@ from memoryos.domain.policies import (
 from memoryos.providers.errors import ProviderOutputInvalid, ProviderTimeout, ProviderUnavailable
 from memoryos.services.errors import ServiceError
 
-_REVIEW_ACTIONS = {"keep_both", "use_new", "keep_existing", "invalid"}
+_REVIEW_ACTIONS = {"keep_both", "use_new", "keep_existing", "invalid", "merge"}
 _REVIEW_STATUSES = {"pending", "resolved"}
 
 
@@ -87,9 +86,7 @@ def _error_from_db(exc: Exception) -> ServiceError:
 def _snapshot_candidate(value: object) -> CandidateMemory:
     try:
         return (
-            value
-            if isinstance(value, CandidateMemory)
-            else CandidateMemory.model_validate(value)
+            value if isinstance(value, CandidateMemory) else CandidateMemory.model_validate(value)
         )
     except Exception as exc:
         raise ServiceError("internal_error", "A stored review candidate is malformed.") from exc
@@ -97,11 +94,7 @@ def _snapshot_candidate(value: object) -> CandidateMemory:
 
 def _snapshot_memory(value: object) -> MemoryRecord:
     try:
-        return (
-            value
-            if isinstance(value, MemoryRecord)
-            else MemoryRecord.model_validate(value)
-        )
+        return value if isinstance(value, MemoryRecord) else MemoryRecord.model_validate(value)
     except Exception as exc:
         raise ServiceError(
             "internal_error",
@@ -112,9 +105,7 @@ def _snapshot_memory(value: object) -> MemoryRecord:
 def _review_contract(row: MemoryReview) -> ReviewItem:
     candidate = _snapshot_candidate(row.candidate_json)
     existing = (
-        _snapshot_memory(row.existing_memory_json)
-        if row.existing_memory_json is not None
-        else None
+        _snapshot_memory(row.existing_memory_json) if row.existing_memory_json is not None else None
     )
     sources = [_snapshot_memory(item) for item in (row.source_memories_json or [])]
     try:
@@ -149,28 +140,6 @@ def _review_contract(row: MemoryReview) -> ReviewItem:
 def _embedding_values(row: Memory) -> list[float]:
     raw_vector = row.embedding
     return [] if raw_vector is None else [float(value) for value in raw_vector]
-
-
-def _centroid_embedding(rows: list[Memory]) -> list[float]:
-    """Build a deterministic source-backed vector for a new consolidation row."""
-
-    vectors = [_embedding_values(row) for row in rows]
-    if not vectors or any(len(vector) != VECTOR_DIMENSIONS for vector in vectors):
-        raise ServiceError(
-            "embedding_model_mismatch",
-            "Consolidation source dimensions are invalid.",
-        )
-    values = [
-        sum(vector[index] for vector in vectors) / len(vectors)
-        for index in range(VECTOR_DIMENSIONS)
-    ]
-    norm = math.sqrt(sum(value * value for value in values))
-    if norm == 0:
-        values = vectors[-1][:]
-        norm = math.sqrt(sum(value * value for value in values))
-    if norm == 0:
-        raise ServiceError("invalid_request", "Consolidation sources have no usable embedding.")
-    return [value / norm for value in values]
 
 
 def _row_memory(row: Memory) -> MemoryRecord:
@@ -224,6 +193,92 @@ class MemoryReviewService:
         self.session_factory = session_factory
         self.embedding_factory = embedding_factory
 
+    @staticmethod
+    def _merge_unavailable(row: MemoryReview) -> str | None:
+        if row.kind != "conflict" or row.existing_memory_json is None or row.memory_id is None:
+            return "Merge requires two stored competing memories."
+        candidate = _snapshot_candidate(row.candidate_json)
+        existing = _snapshot_memory(row.existing_memory_json)
+        if any(
+            getattr(candidate, field) != getattr(existing, field)
+            for field in ("memory_type", "subject", "context_key", "attribute_key")
+        ):
+            return "These memories describe different contexts. Consider keeping both instead."
+        if row.mode == ExecutionMode.DEMO:
+            return (
+                "Custom corrections require live embeddings. "
+                "Demo mode only supports fixed fixture vectors."
+            )
+        return None
+
+    @staticmethod
+    def _keep_both_unavailable(row: MemoryReview) -> str | None:
+        if row.kind != "conflict" or row.existing_memory_json is None or row.memory_id is None:
+            return "Keep both requires two stored memories."
+        candidate = _snapshot_candidate(row.candidate_json)
+        existing = _snapshot_memory(row.existing_memory_json)
+        separate_contexts = any(
+            getattr(candidate, field)
+            and getattr(existing, field)
+            and getattr(candidate, field) != getattr(existing, field)
+            for field in ("subject", "context_key", "attribute_key")
+        )
+        separate_timeframes = (
+            existing.expires_at is not None
+            and candidate.effective_at is not None
+            and existing.expires_at <= candidate.effective_at
+        ) or (candidate.expires_at is not None and candidate.expires_at <= existing.effective_at)
+        if not separate_contexts and not separate_timeframes:
+            return (
+                "Keep both requires clearly separate contexts or timeframes. "
+                "Otherwise choose one or merge a correction."
+            )
+        return None
+
+    def _present(self, row: MemoryReview, repo: MemoryRepository) -> ReviewItem:
+        item = _review_contract(row)
+        item.merge_unavailable_reason = self._merge_unavailable(row)
+        item.keep_both_unavailable_reason = self._keep_both_unavailable(row)
+        if row.existing_memory_id:
+            item.current_existing_memory = repo.get_by_id(row.scope_id, row.existing_memory_id)
+            item.existing_evidence = repo.list_events(
+                scope_id=row.scope_id, memory_id=row.existing_memory_id
+            )
+        if row.memory_id:
+            current = repo.get_by_id(row.scope_id, row.memory_id)
+            if row.status == "pending":
+                item.candidate_memory = current
+                item.candidate_evidence = repo.list_events(
+                    scope_id=row.scope_id, memory_id=row.memory_id
+                )
+            else:
+                item.result_memory = current
+                if row.kind == "conflict" and row.source_memory_ids:
+                    original_id = UUID(row.source_memory_ids[-1])
+                    item.candidate_memory = repo.get_by_id(row.scope_id, original_id)
+                    item.candidate_evidence = repo.list_events(
+                        scope_id=row.scope_id, memory_id=original_id
+                    )
+        return item
+
+    def _resolved_retry(
+        self, row: MemoryReview, request: ResolveReviewRequest, repo: MemoryRepository
+    ) -> ReviewItem:
+        result = repo.get_by_id(row.scope_id, row.memory_id) if row.memory_id else None
+        if (
+            row.resolution == request.action
+            and row.resolution_reason == request.reason
+            and (
+                request.action != "merge"
+                or (result is not None and result.content == request.merged_content)
+            )
+        ):
+            return self._present(row, repo)
+        raise ServiceError(
+            "revision_conflict",
+            "This review already has a different decision. Refresh to see the result.",
+        )
+
     def _session(self) -> AbstractContextManager[Session]:
         return self.session_factory()
 
@@ -242,7 +297,7 @@ class MemoryReviewService:
                 repo.require_scope(scope_id)
                 rows, total = repo.list_reviews(scope_id=scope_id, status=status, limit=limit)
                 return ReviewListResponse(
-                    items=[_review_contract(row) for row in rows],
+                    items=[self._present(row, repo) for row in rows],
                     total=total,
                 )
         except ServiceError:
@@ -258,7 +313,7 @@ class MemoryReviewService:
                 row = repo.get_review(scope_id=scope_id, review_id=review_id)
                 if row is None:
                     raise ServiceError("not_found", "The review item was not found in this scope.")
-                return _review_contract(row)
+                return self._present(row, repo)
         except ServiceError:
             raise
         except Exception as exc:
@@ -306,7 +361,7 @@ class MemoryReviewService:
                         existing_memory_id=existing_memory.id if existing_memory else None,
                         mode=mode,
                     )
-                    return _review_contract(row)
+                    return self._present(row, repo)
         except ServiceError:
             raise
         except Exception as exc:
@@ -330,9 +385,47 @@ class MemoryReviewService:
                     raise ServiceError("not_found", "The review item was not found in this scope.")
                 # A retried request with the same action is safely idempotent.
                 if row.status == "resolved":
-                    if row.resolution == request.action:
-                        return _review_contract(row)
-                    raise ServiceError("invalid_request", "The review item is already resolved.")
+                    return self._resolved_retry(row, request, repo)
+                # Provider work precedes the scope lock; any failure leaves the review untouched.
+                merge_vector = None
+                if request.action == "merge":
+                    unavailable = self._merge_unavailable(row)
+                    if unavailable:
+                        raise ServiceError("invalid_request", unavailable)
+                    if request.merged_content is None:
+                        raise ServiceError("invalid_request", "A corrected statement is required.")
+                    sources = [
+                        _snapshot_candidate(row.candidate_json).content,
+                        _snapshot_memory(row.existing_memory_json).content,
+                    ]
+                    if request.merged_content in sources:
+                        raise ServiceError(
+                            "invalid_request",
+                            "Choose Keep A or Keep B to retain an unchanged statement.",
+                        )
+                    from memoryos.providers.factory import make_embedding_provider
+
+                    provider = (self.embedding_factory or make_embedding_provider)(
+                        ExecutionMode(row.mode), self.settings
+                    )
+                    if provider.model_name != scope.embedding_model:
+                        raise ServiceError(
+                            "embedding_model_mismatch",
+                            "The correction must use this scope's embedding model.",
+                        )
+                    vectors = provider.embed([request.merged_content])
+                    if len(vectors) != 1:
+                        raise ServiceError(
+                            "provider_output_invalid", "The correction embedding was not returned."
+                        )
+                    merge_vector = vectors[0]
+                if request.action == "keep_both":
+                    unavailable = self._keep_both_unavailable(row)
+                    if unavailable:
+                        raise ServiceError("invalid_request", unavailable)
+                # Refresh cached rows before acquiring the scope lock. A concurrent
+                # writer during embedding must be detected by the revision check.
+                session.expire_all()
                 with repo.mutation(scope_id=scope_id, expected_revision=scope.revision):
                     row = repo.get_review(
                         scope_id=scope_id,
@@ -344,23 +437,33 @@ class MemoryReviewService:
                             "not_found", "The review item was not found in this scope."
                         )
                     if row.status == "resolved":
-                        if row.resolution == request.action:
-                            return _review_contract(row)
-                        raise ServiceError(
-                            "invalid_request", "The review item is already resolved."
-                        )
+                        return self._resolved_retry(row, request, repo)
                     self._assert_current_snapshot(session, row)
                     if row.kind == "consolidation" and request.action == "keep_both":
                         raise ServiceError(
                             "invalid_request",
                             "Consolidation proposals require use_new, keep_existing, or invalid.",
                         )
+                    original_pair = {
+                        memory_id
+                        for memory_id in (row.memory_id, row.existing_memory_id)
+                        if memory_id is not None
+                    }
+                    source_snapshots = {
+                        str(memory_id): record.model_dump(mode="json")
+                        for memory_id in original_pair
+                        if (record := repo.get_by_id(scope_id, memory_id)) is not None
+                    }
+                    if row.kind == "conflict":
+                        self._preserve_review_sources(row, source_snapshots)
                     resolved_memory_id = self._apply_action(
                         session=session,
                         repo=repo,
                         row=row,
                         action=request.action,
                         reason=request.reason,
+                        merged_content=request.merged_content,
+                        merge_vector=merge_vector,
                     )
                     row.status = "resolved"
                     row.resolution = request.action
@@ -368,12 +471,46 @@ class MemoryReviewService:
                     row.resolved_at = utc_now()
                     if resolved_memory_id is not None:
                         row.memory_id = resolved_memory_id
+                    # Older fixtures can contain mirrored reviews of the very same pair.
+                    # Resolve both orientations atomically so no impossible pending item remains.
+                    if row.kind == "conflict" and len(original_pair) == 2:
+                        mirrors = session.scalars(
+                            select(MemoryReview)
+                            .where(
+                                MemoryReview.scope_id == scope_id,
+                                MemoryReview.status == "pending",
+                                MemoryReview.kind == "conflict",
+                                MemoryReview.id != row.id,
+                                MemoryReview.memory_id.in_(original_pair),
+                                MemoryReview.existing_memory_id.in_(original_pair),
+                            )
+                            .with_for_update()
+                        )
+                        for mirror in mirrors:
+                            swapped = mirror.existing_memory_id != row.existing_memory_id
+                            action = request.action
+                            if swapped and action in {"use_new", "keep_existing"}:
+                                action = "keep_existing" if action == "use_new" else "use_new"
+                            elif swapped and action == "invalid":
+                                action = "use_new"
+                            self._preserve_review_sources(mirror, source_snapshots)
+                            mirror.status = "resolved"
+                            mirror.resolution = action
+                            mirror.resolution_reason = request.reason
+                            mirror.resolved_at = row.resolved_at
+                            mirror.memory_id = resolved_memory_id
                     session.flush()
-                    return _review_contract(row)
+                    return self._present(row, repo)
         except ServiceError:
             raise
         except Exception as exc:
             raise _error_from_db(exc) from exc
+
+    @staticmethod
+    def _preserve_review_sources(row: MemoryReview, snapshots: dict[str, dict[str, Any]]) -> None:
+        ids = [str(value) for value in (row.existing_memory_id, row.memory_id) if value]
+        row.source_memory_ids = ids
+        row.source_memories_json = [snapshots[value] for value in ids if value in snapshots]
 
     def _assert_current_snapshot(self, session: Session, row: MemoryReview) -> None:
         """Fail closed if a memory changed after the review was opened."""
@@ -395,7 +532,23 @@ class MemoryReviewService:
                 raise ServiceError(
                     "revision_conflict", "The review candidate changed after it was proposed."
                 )
-            if candidate_row.status in {MemoryStatus.FORGOTTEN, MemoryStatus.SUPERSEDED}:
+            if any(
+                getattr(candidate_row, field) != getattr(expected_candidate, field)
+                for field in (
+                    "memory_type",
+                    "subject",
+                    "context_key",
+                    "attribute_key",
+                    "importance",
+                    "confidence",
+                    "expires_at",
+                )
+            ):
+                raise ServiceError(
+                    "revision_conflict",
+                    "The candidate's context or evidence score changed. Refresh the review.",
+                )
+            if row.kind == "conflict" and candidate_row.status is not MemoryStatus.DISPUTED:
                 raise ServiceError(
                     "revision_conflict", "The review candidate is no longer pending review."
                 )
@@ -422,6 +575,19 @@ class MemoryReviewService:
                 or existing_row.version != expected_existing.version
                 or existing_row.lineage_id != expected_existing.lineage_id
                 or existing_row.status is not expected_existing.status
+                or any(
+                    getattr(existing_row, field) != getattr(expected_existing, field)
+                    for field in (
+                        "memory_type",
+                        "subject",
+                        "context_key",
+                        "attribute_key",
+                        "importance",
+                        "confidence",
+                        "effective_at",
+                        "expires_at",
+                    )
+                )
             ):
                 raise ServiceError(
                     "revision_conflict", "The existing memory changed after review was proposed."
@@ -463,6 +629,8 @@ class MemoryReviewService:
         row: MemoryReview,
         action: str,
         reason: str,
+        merged_content: str | None = None,
+        merge_vector: list[float] | None = None,
     ) -> UUID | None:
         candidate_row = (
             session.scalar(
@@ -495,6 +663,26 @@ class MemoryReviewService:
             # the source snapshots and review audit row.
             return None
 
+        if action == "merge":
+            if (
+                candidate_row is None
+                or existing_row is None
+                or merged_content is None
+                or merge_vector is None
+            ):
+                raise ServiceError(
+                    "invalid_request", "Merge requires both sources and a corrected statement."
+                )
+            return self._merge(
+                session,
+                repo,
+                row,
+                existing_row,
+                candidate_row,
+                merged_content,
+                merge_vector,
+                reason,
+            )
         if action == "keep_both":
             return self._keep_both(
                 session=session,
@@ -528,8 +716,8 @@ class MemoryReviewService:
             )
             return candidate_row.id
         if action == "keep_existing":
-            if existing_row is not None:
-                self._activate(existing_row)
+            if existing_row is None:
+                raise ServiceError("invalid_request", "There is no existing memory to keep.")
             if candidate_row is not None:
                 candidate_row.status = MemoryStatus.SUPERSEDED
                 candidate_row.superseded_by_id = existing_row.id if existing_row else None
@@ -547,6 +735,7 @@ class MemoryReviewService:
                     },
                 )
             if existing_row is not None:
+                self._activate(existing_row)
                 repo.insert_event(
                     scope_id=row.scope_id,
                     memory_id=existing_row.id,
@@ -558,8 +747,6 @@ class MemoryReviewService:
                 )
             return existing_row.id if existing_row is not None else None
         if action == "invalid":
-            if existing_row is not None:
-                self._activate(existing_row)
             if candidate_row is not None:
                 candidate_row.status = MemoryStatus.FORGOTTEN
                 candidate_row.superseded_by_id = None
@@ -580,6 +767,17 @@ class MemoryReviewService:
                     reason_code="review_candidate_invalid",
                     reason_summary=reason,
                     after={"status": MemoryStatus.FORGOTTEN.value, "review_id": str(row.id)},
+                )
+            if existing_row is not None:
+                self._activate(existing_row)
+                repo.insert_event(
+                    scope_id=row.scope_id,
+                    memory_id=existing_row.id,
+                    related_memory_id=candidate_row.id if candidate_row else None,
+                    event_type=MemoryEventType.RESOLVED,
+                    reason_code="review_candidate_invalid",
+                    reason_summary=reason,
+                    after={"status": MemoryStatus.ACTIVE.value, "review_id": str(row.id)},
                 )
             return existing_row.id if existing_row is not None else None
         raise ServiceError("invalid_request", "Unsupported review action.")
@@ -608,6 +806,7 @@ class MemoryReviewService:
                 memory_type=candidate_row.memory_type,
                 importance=candidate_row.importance,
                 confidence=candidate_row.confidence,
+                reinforcement_count=candidate_row.reinforcement_count,
                 embedding=_embedding_values(candidate_row),
                 embedding_model=candidate_row.embedding_model,
                 status=MemoryStatus.ACTIVE,
@@ -624,6 +823,16 @@ class MemoryReviewService:
                     *candidate_record.why,
                     "kept as a separate active interpretation after owner review",
                 ],
+            )
+            repo.insert_event(
+                scope_id=review.scope_id,
+                memory_id=copy.record.id,
+                related_memory_id=candidate_row.id,
+                event_type=MemoryEventType.CREATED,
+                reason_code="review_keep_both_source",
+                reason_summary=reason,
+                evidence_excerpt=review.evidence_excerpt,
+                after={"review_id": str(review.id), "source_memory_id": str(candidate_row.id)},
             )
             candidate_row.status = MemoryStatus.SUPERSEDED
             candidate_row.superseded_by_id = copy.record.id
@@ -682,6 +891,85 @@ class MemoryReviewService:
             )
         return candidate_row.id
 
+    def _merge(
+        self,
+        session: Session,
+        repo: MemoryRepository,
+        review: MemoryReview,
+        existing: Memory,
+        candidate: Memory,
+        content: str,
+        vector: list[float],
+        reason: str,
+    ) -> UUID:
+        # A correction is a new immutable version, never an edit of either source.
+        scope = repo.require_scope(review.scope_id)
+        if any(source.embedding_model != scope.embedding_model for source in (existing, candidate)):
+            raise ServiceError(
+                "embedding_model_mismatch",
+                "Both sources must use this scope's embedding model before they can be merged.",
+            )
+        version = (
+            session.scalar(
+                select(func.max(Memory.version)).where(
+                    Memory.scope_id == review.scope_id, Memory.lineage_id == existing.lineage_id
+                )
+            )
+            or 0
+        )
+        merged = repo.insert_memory(
+            scope_id=review.scope_id,
+            content=content,
+            memory_type=existing.memory_type,
+            subject=existing.subject,
+            context_key=existing.context_key,
+            attribute_key=existing.attribute_key,
+            lineage_id=existing.lineage_id,
+            version=version + 1,
+            status=MemoryStatus.DISPUTED,
+            importance=max(existing.importance, candidate.importance),
+            confidence=min(existing.confidence, candidate.confidence),
+            embedding=vector,
+            embedding_model=existing.embedding_model,
+            effective_at=utc_now(),
+            last_confirmed_at=utc_now(),
+            expires_at=min(
+                (expiry for expiry in (existing.expires_at, candidate.expires_at) if expiry),
+                default=None,
+            ),
+            why=["corrected by owner review; both source versions preserved", reason],
+        )
+        merged_row = session.get(Memory, merged.record.id)
+        assert merged_row is not None
+        for source in (existing, candidate):
+            self._supersede(
+                repo=repo, old=source, new=merged_row, reason_code="review_merge", reason=reason
+            )
+        self._activate(merged_row)
+        repo.insert_event(
+            scope_id=review.scope_id,
+            memory_id=merged_row.id,
+            related_memory_id=candidate.id,
+            event_type=MemoryEventType.CREATED,
+            reason_code="review_merge",
+            reason_summary=reason,
+            evidence_excerpt=review.evidence_excerpt,
+            after={
+                "review_id": str(review.id),
+                "source_memory_ids": [str(existing.id), str(candidate.id)],
+            },
+        )
+        repo.insert_event(
+            scope_id=review.scope_id,
+            memory_id=merged_row.id,
+            related_memory_id=existing.id,
+            event_type=MemoryEventType.RESOLVED,
+            reason_code="review_merge",
+            reason_summary=reason,
+            after={"status": "active", "review_id": str(review.id)},
+        )
+        return merged_row.id
+
     @staticmethod
     def _activate(row: Memory) -> None:
         row.status = MemoryStatus.ACTIVE
@@ -734,86 +1022,41 @@ class MemoryReviewService:
         row: MemoryReview,
         reason: str,
     ) -> UUID:
-        candidate = _snapshot_candidate(row.candidate_json)
-        mode = ExecutionMode(row.mode)
-        scope = repo.require_scope(row.scope_id)
-        expected_model = (
-            self.settings.demo_embedding_model
-            if mode is ExecutionMode.DEMO
-            else self.settings.embedding_model
-        )
-        if scope.embedding_model != expected_model:
-            raise ServiceError(
-                "embedding_model_mismatch",
-                "The review embedding mode does not match this scope.",
-            )
-        source_rows = [
-            session.scalar(
+        # Use the same policy and persistence path as ingestion. Approval never
+        # makes an arbitrary summary or centroid stand in for distinct facts.
+        from memoryos.domain.policies import validate_consolidation
+        from memoryos.services.consolidation import persist_consolidation
+
+        source_rows = list(
+            session.scalars(
                 select(Memory)
-                .where(Memory.scope_id == row.scope_id, Memory.id == UUID(str(source_id)))
+                .where(
+                    Memory.scope_id == row.scope_id,
+                    Memory.id.in_([UUID(str(value)) for value in row.source_memory_ids or []]),
+                )
+                .order_by(Memory.id.asc())
                 .with_for_update()
             )
-            for source_id in (row.source_memory_ids or [])
-        ]
-        locked_sources: list[Memory] = []
-        for source in source_rows:
-            if source is None:
-                raise ServiceError(
-                    "revision_conflict",
-                    "A consolidation source no longer exists.",
-                )
-            locked_sources.append(source)
-        embedding = _centroid_embedding(locked_sources)
-        source_records = [_row_memory(source) for source in locked_sources]
-        inserted = repo.insert_memory(
-            scope_id=row.scope_id,
-            content=candidate.content,
-            memory_type=candidate.memory_type,
-            importance=candidate.importance,
-            confidence=candidate.confidence,
-            embedding=embedding,
-            embedding_model=expected_model,
-            status=MemoryStatus.ACTIVE,
-            subject=candidate.subject,
-            context_key=candidate.context_key,
-            attribute_key=candidate.attribute_key,
-            lineage_id=uuid.uuid4(),
-            version=1,
-            effective_at=candidate.effective_at or utc_now(),
-            last_confirmed_at=utc_now(),
-            why=[
-                *memory_why_for_creation(
-                    candidate.memory_type,
-                    importance=candidate.importance,
-                    confidence=candidate.confidence,
-                ),
-                f"consolidated from {len(source_records)} preserved source memories",
-            ],
         )
-        repo.insert_event(
-            scope_id=row.scope_id,
-            memory_id=inserted.record.id,
-            event_type=MemoryEventType.CREATED,
-            relation=MemoryRelation.NEW,
-            reason_code="consolidation_approved",
-            reason_summary=reason,
-            evidence_excerpt=row.evidence_excerpt,
-            after={
-                "review_id": str(row.id),
-                "source_memory_ids": [str(source.id) for source in source_records],
-            },
+        validation = validate_consolidation(
+            [_row_memory(source) for source in source_rows],
+            as_of=utc_now(),
+            automatic=False,
         )
-        for source_record in source_records:
-            repo.insert_event(
-                scope_id=row.scope_id,
-                memory_id=source_record.id,
-                related_memory_id=inserted.record.id,
-                event_type=MemoryEventType.RESOLVED,
-                reason_code="consolidation_source_preserved",
-                reason_summary="Source memory preserved after consolidation approval.",
-                after={"consolidated_memory_id": str(inserted.record.id), "review_id": str(row.id)},
-            )
-        return inserted.record.id
+        candidate = _snapshot_candidate(row.candidate_json)
+        if validation.plan is None or validation.plan.canonical.content != candidate.content:
+            raise ServiceError("invalid_request", validation.reason)
+        scope = repo.require_scope(row.scope_id)
+        if validation.plan.canonical.embedding_model != scope.embedding_model:
+            raise ServiceError("embedding_model_mismatch", "The source embedding space changed.")
+        return persist_consolidation(
+            session=session,
+            repo=repo,
+            plan=validation.plan,
+            provenance="owner-review",
+            review_id=row.id,
+        )
+
 
 ReviewService = MemoryReviewService
 

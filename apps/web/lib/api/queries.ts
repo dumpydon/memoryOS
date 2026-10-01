@@ -1,6 +1,7 @@
 import { apiFetch } from "./client";
 import type {
   CapabilitiesResponse,
+  ContextResponse,
   ExecutionMode,
   DemoCatalogResponse,
   IngestInteractionResponse,
@@ -116,6 +117,46 @@ export function postRecallCompare(
   });
 }
 
+export function postRecallContext(
+  input: {
+    scope_id: string;
+    query: string;
+    mode: ExecutionMode;
+    limit?: number;
+  },
+  token?: string | null,
+) {
+  return apiFetch<ContextResponse>("/v1/recall/context", {
+    method: "POST",
+    body: JSON.stringify(input),
+    token,
+  });
+}
+
+export function postMemoryCorrection(
+  memoryId: string,
+  input: {
+    scope_id: string;
+    text: string;
+    mode: ExecutionMode;
+    preview: boolean;
+    idempotency_key?: string;
+    expected_scope_revision?: number;
+    reviewed_decisions?: IngestInteractionResponse["decisions"][number]["decision_type"][];
+    reviewed_targets?: (string | null)[];
+  },
+  token?: string | null,
+) {
+  return apiFetch<IngestInteractionResponse>(
+    `/v1/memories/${encodeURIComponent(memoryId)}/correct`,
+    {
+      method: "POST",
+      body: JSON.stringify(input),
+      token,
+    },
+  );
+}
+
 export function getReviews(
   scopeId: string,
   status: "pending" | "resolved" = "pending",
@@ -138,12 +179,13 @@ export function resolveReview(
   action: ReviewAction,
   reason: string,
   token: string,
+  mergedContent?: string,
 ) {
   return apiFetch<ReviewItem>(
     `/v1/reviews/${encodeURIComponent(reviewId)}/resolve?scope_id=${encodeURIComponent(scopeId)}`,
     {
       method: "POST",
-      body: JSON.stringify({ action, reason }),
+      body: JSON.stringify({ action, reason, merged_content: mergedContent }),
       token,
     },
   );

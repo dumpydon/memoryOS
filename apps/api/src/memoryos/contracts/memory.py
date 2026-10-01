@@ -47,12 +47,14 @@ class MemoryEvent(ContractModel):
     event_type: MemoryEventType
     related_memory_id: UUID | None = None
     evidence_excerpt: str | None = None
+    provenance: str | None = None
     reason_code: str
     reason_summary: str
     before: dict[str, Any] | None = None
     after: dict[str, Any] | None = None
     memory_content: str | None = None
     created_at: datetime
+    source_occurred_at: datetime | None = None
 
 
 class MemoryListItem(MemoryRecord):

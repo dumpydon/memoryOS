@@ -42,7 +42,7 @@ from memoryos.db.errors import (
     ScopeNotFoundError,
     ScopeRevisionConflict,
 )
-from memoryos.db.models import Memory
+from memoryos.db.models import Memory, MemoryReview
 from memoryos.db.repositories import MemoryRepository
 from memoryos.domain.enums import (
     ExecutionMode,
@@ -57,6 +57,7 @@ from memoryos.domain.policies import (
     PolicyAction,
     require_utc,
     validate_candidates,
+    validate_consolidation,
     validate_relation,
 )
 from memoryos.graph.factory import GraphNode, build_ingestion_graph
@@ -69,6 +70,7 @@ from memoryos.providers.errors import (
     UnsupportedDemoInput,
 )
 from memoryos.providers.factory import make_embedding_provider, make_structured_provider
+from memoryos.services.consolidation import persist_consolidation
 from memoryos.services.errors import ServiceError
 
 MAX_CANDIDATES = 5
@@ -84,6 +86,15 @@ def _hash_request(request: IngestInteractionRequest) -> str:
     """Hash user input without generated receive/occurred timestamps or the key."""
 
     payload = request.model_dump(mode="json", exclude={"idempotency_key", "occurred_at"})
+    # Keep hashes of existing ordinary interactions compatible with their receipts.
+    for key in (
+        "correction_memory_id",
+        "expected_scope_revision",
+        "reviewed_decisions",
+        "reviewed_targets",
+    ):
+        if payload.get(key) is None:
+            payload.pop(key, None)
     if request.occurred_at is not None:
         payload["occurred_at"] = require_utc(
             request.occurred_at, field_name="occurred_at"
@@ -155,6 +166,7 @@ def _trace_payload(
     candidates: Sequence[CandidateMemory],
     memory_ids: Sequence[UUID],
     action_by_candidate: Mapping[str, PolicyAction],
+    relation_assessments: Sequence[RelationAssessment] = (),
 ) -> dict[str, Any]:
     safe_candidates: list[dict[str, Any]] = []
     for candidate in candidates:
@@ -177,6 +189,7 @@ def _trace_payload(
         "provider_mode": mode.value,
         "steps": steps,
         "candidates": safe_candidates,
+        "relation_assessments": [item.model_dump(mode="json") for item in relation_assessments],
         "memory_ids": [str(memory_id) for memory_id in memory_ids],
     }
 
@@ -228,6 +241,10 @@ def _response_from_interaction(
         mode=interaction.mode,
         candidates=candidates,
         decisions=decisions,
+        relation_assessments=[
+            RelationAssessment.model_validate(item)
+            for item in trace_payload.get("relation_assessments", [])
+        ],
         memory_ids=memory_ids,
         warnings=[],
         trace=trace,
@@ -265,6 +282,37 @@ class MemoryIngestionService:
                 require_utc(request.occurred_at, field_name="occurred_at")
             except (TypeError, ValueError) as exc:
                 raise ServiceError("invalid_request", str(exc)) from exc
+        if request.correction_memory_id is not None and not request.preview:
+            if (
+                request.expected_scope_revision is None
+                or request.reviewed_decisions is None
+                or request.reviewed_targets is None
+            ):
+                raise ServiceError(
+                    "invalid_request", "Review this correction before confirming it."
+                )
+            if request.mode is ExecutionMode.DEMO and self.settings.app_env.casefold() in {
+                "production",
+                "prod",
+            }:
+                raise ServiceError(
+                    "scope_forbidden", "Demo corrections are preview-only in production."
+                )
+
+    def _correction_reference(
+        self, repo: MemoryRepository, request: IngestInteractionRequest
+    ) -> MemoryRecord | None:
+        if request.correction_memory_id is None:
+            return None
+        record = repo.get_by_id(request.scope_id, request.correction_memory_id)
+        if record is None:
+            raise ServiceError("not_found", "The selected memory was not found in this scope.")
+        if record.status is not MemoryStatus.ACTIVE:
+            raise ServiceError(
+                "revision_conflict",
+                "This memory is no longer active. Recall again before correcting it.",
+            )
+        return record
 
     def _scope_snapshot(
         self,
@@ -273,7 +321,17 @@ class MemoryIngestionService:
         expected_model = _expected_embedding_model(self.settings, request.mode)
         try:
             with self._session() as session:
-                scope = MemoryRepository(session, self.settings).require_scope(request.scope_id)
+                repo = MemoryRepository(session, self.settings)
+                scope = repo.require_scope(request.scope_id)
+                self._correction_reference(repo, request)
+                if (
+                    request.expected_scope_revision is not None
+                    and scope.revision != request.expected_scope_revision
+                ):
+                    raise ServiceError(
+                        "revision_conflict",
+                        "Memory state changed after preview. Review the correction again.",
+                    )
         except Exception as exc:
             raise _db_error(exc) from exc
         if scope.embedding_model != expected_model:
@@ -344,10 +402,23 @@ class MemoryIngestionService:
         expected_revision: int,
     ) -> dict[str, GraphNode]:
         embedding_provider, structured_provider, model, dimensions = self._providers(request.mode)
+        reference = None
+        if request.correction_memory_id is not None:
+            with self._session() as session:
+                reference = self._correction_reference(
+                    MemoryRepository(session, self.settings), request
+                )
 
         def extract(state: GraphState) -> GraphState:
             try:
-                raw_candidates = structured_provider.extract_candidates(text=request.text)
+                extract_method = structured_provider.extract_candidates
+                extract_kwargs: dict[str, Any] = {"text": request.text}
+                if (
+                    reference is not None
+                    and "reference_memory" in inspect.signature(extract_method).parameters
+                ):
+                    extract_kwargs["reference_memory"] = reference
+                raw_candidates = extract_method(**extract_kwargs)
             except Exception as exc:
                 raise _provider_error(exc) from exc
             if not isinstance(raw_candidates, list) or len(raw_candidates) > MAX_CANDIDATES:
@@ -363,10 +434,16 @@ class MemoryIngestionService:
                 if candidate.effective_at is None:
                     candidate = candidate.model_copy(update={"effective_at": occurred_at})
                 candidates.append(candidate)
-            return {"candidates": candidates}
+            batch = validate_candidates(candidates, request.text)
+            admitted = [
+                result.candidate
+                for result in batch.validations
+                if result.accepted and result.candidate is not None
+            ]
+            return {"candidates": candidates, "admitted_candidates": admitted}
 
         def embed(state: GraphState) -> GraphState:
-            candidates = state.get("candidates", [])
+            candidates = state.get("admitted_candidates", [])
             try:
                 vectors = embedding_provider.embed([candidate.content for candidate in candidates])
             except Exception as exc:
@@ -389,12 +466,25 @@ class MemoryIngestionService:
             return {"candidate_embeddings": normalized}
 
         def find_related(state: GraphState) -> GraphState:
-            candidates = state.get("candidates", [])
+            candidates = state.get("admitted_candidates", [])
             vectors = state.get("candidate_embeddings", [])
             related: dict[str, list[MemoryRecord]] = {}
+            blocked: set[UUID] = set()
             try:
                 with self._session() as session:
                     repo = MemoryRepository(session, self.settings)
+                    for review in session.scalars(
+                        select(MemoryReview).where(
+                            MemoryReview.scope_id == request.scope_id,
+                            MemoryReview.status == "pending",
+                        )
+                    ):
+                        blocked.update(UUID(str(value)) for value in review.source_memory_ids or [])
+                        blocked.update(
+                            value
+                            for value in (review.memory_id, review.existing_memory_id)
+                            if value
+                        )
                     for index, candidate in enumerate(candidates):
                         rows = repo.related_candidates(
                             scope_id=request.scope_id,
@@ -403,31 +493,26 @@ class MemoryIngestionService:
                             query_embedding=vectors[index] if index < len(vectors) else None,
                             embedding_model=model,
                             memory_type=candidate.memory_type,
-                            statuses=[MemoryStatus.ACTIVE],
-                            include_disputed=False,
+                            statuses=[MemoryStatus.ACTIVE, MemoryStatus.DISPUTED],
+                            include_disputed=True,
                             as_of=received_at,
                             limit=MAX_RELATED_MEMORIES_PER_CANDIDATE,
                         )
-                        if not rows:
-                            rows = repo.related_candidates(
-                                scope_id=request.scope_id,
-                                attribute_key=candidate.attribute_key,
-                                context_key=candidate.context_key,
-                                query_embedding=vectors[index] if index < len(vectors) else None,
-                                embedding_model=model,
-                                memory_type=candidate.memory_type,
-                                statuses=[MemoryStatus.DISPUTED],
-                                include_disputed=True,
-                                as_of=received_at,
-                                limit=MAX_RELATED_MEMORIES_PER_CANDIDATE,
-                            )
-                        related[candidate.candidate_id] = [row.record for row in rows]
+                        records = [row.record for row in rows]
+                        if reference is not None:
+                            current = self._correction_reference(repo, request)
+                            assert current is not None
+                            records = [
+                                current,
+                                *[record for record in records if record.id != reference.id],
+                            ][:MAX_RELATED_MEMORIES_PER_CANDIDATE]
+                        related[candidate.candidate_id] = records
             except Exception as exc:
                 raise _db_error(exc) from exc
-            return {"related_memories": related}
+            return {"related_memories": related, "consolidation_blocked_ids": list(blocked)}
 
         def assess_relations(state: GraphState) -> GraphState:
-            candidates = state.get("candidates", [])
+            candidates = state.get("admitted_candidates", [])
             related_map = state.get("related_memories", {})
             unique: dict[UUID, MemoryRecord] = {}
             for candidate in candidates:
@@ -442,6 +527,7 @@ class MemoryIngestionService:
                 # Keep compatibility with older injected providers that implement
                 # the original two-keyword protocol.
                 relation_method = structured_provider.assess_relations
+                parameters: Mapping[str, inspect.Parameter] = {}
                 try:
                     parameters = inspect.signature(relation_method).parameters
                 except (TypeError, ValueError):
@@ -457,6 +543,8 @@ class MemoryIngestionService:
                 }
                 if accepts_source:
                     relation_kwargs["source_text"] = request.text
+                if reference is not None and "reference_memory" in parameters:
+                    relation_kwargs["reference_memory"] = reference
                 relations = relation_method(**relation_kwargs)
             except Exception as exc:
                 raise _provider_error(exc) from exc
@@ -490,6 +578,15 @@ class MemoryIngestionService:
                 for record in records
             }
             actions: list[PolicyAction] = []
+            consolidation_plans = {}
+            if not candidates:
+                actions.append(
+                    PolicyAction(
+                        decision_type=IngestDecisionType.SKIPPED,
+                        reason_code="no_durable_information",
+                        reason_summary="No supported durable information was extracted.",
+                    )
+                )
             used_targets: set[UUID] = set()
             used_candidate_ids: set[str] = set()
             has_relations = bool(state.get("relation_assessments"))
@@ -509,13 +606,7 @@ class MemoryIngestionService:
                     actions.append(validation.action)
                     continue
                 if not has_relations:
-                    action = PolicyAction(
-                        decision_type=IngestDecisionType.CREATED,
-                        reason_code="new_candidate",
-                        reason_summary="Accepted candidate has no matching existing memory.",
-                        candidate_id=candidate.candidate_id,
-                        confidence=candidate.confidence,
-                    )
+                    action = validation.action
                 else:
                     assessment = relation_map.get(candidate.candidate_id)
                     if assessment is None:
@@ -528,6 +619,64 @@ class MemoryIngestionService:
                         interaction_id=interaction_id,
                         used_candidate_ids=used_candidate_ids,
                     )
+                    if (
+                        action.decision_type is IngestDecisionType.REINFORCED
+                        and len(assessment.consolidation_source_ids) >= 2
+                    ):
+                        source_ids = assessment.consolidation_source_ids
+                        sources = [
+                            all_related[value] for value in source_ids if value in all_related
+                        ]
+                        if (
+                            assessment.value_comparison != "equivalent"
+                            or action.related_memory_id not in source_ids
+                            or len(sources) != len(source_ids)
+                            or set(source_ids) & set(state.get("consolidation_blocked_ids", []))
+                        ):
+                            action = replace(
+                                action,
+                                consolidation_note=(
+                                    "Kept separate — uncertain equivalence or a pending review."
+                                ),
+                            )
+                        else:
+                            consolidation_validation = validate_consolidation(
+                                sources,
+                                candidate=candidate,
+                                as_of=received_at,
+                                relation_confidence=assessment.confidence,
+                            )
+                            if consolidation_validation.plan is not None:
+                                consolidation_plans[candidate.candidate_id] = (
+                                    consolidation_validation.plan
+                                )
+                                action = replace(
+                                    action,
+                                    decision_type=IngestDecisionType.CONSOLIDATED,
+                                    reason_code="memory_consolidated",
+                                    reason_summary=consolidation_validation.reason,
+                                    source_memory_ids=tuple(source_ids),
+                                    canonical_content=consolidation_validation.plan.canonical.content,
+                                    confidence=min(
+                                        source.confidence
+                                        for source in consolidation_validation.plan.sources
+                                    ),
+                                )
+                            else:
+                                action = replace(
+                                    action, consolidation_note=consolidation_validation.reason
+                                )
+                if action.decision_type is IngestDecisionType.CONSOLIDATED:
+                    if used_targets & set(action.source_memory_ids):
+                        consolidation_plans.pop(candidate.candidate_id, None)
+                        action = replace(
+                            action,
+                            decision_type=IngestDecisionType.REJECTED,
+                            reason_code="duplicate_relation_target",
+                            reason_summary="A source is already used by this interaction.",
+                        )
+                    else:
+                        used_targets.update(action.source_memory_ids)
                 if action.related_memory_id is not None and action.decision_type in {
                     IngestDecisionType.REINFORCED,
                     IngestDecisionType.SUPERSEDED,
@@ -546,10 +695,33 @@ class MemoryIngestionService:
                         target_id = action.related_memory_id
                         if target_id is not None:
                             used_targets.add(target_id)
-                if action.decision_type is IngestDecisionType.REINFORCED:
+                if action.decision_type in {
+                    IngestDecisionType.REINFORCED,
+                    IngestDecisionType.CONSOLIDATED,
+                }:
                     used_candidate_ids.add(candidate.candidate_id)
                 actions.append(action)
-            return {"policy_actions": actions, "decisions": _as_decisions(actions)}
+            if (
+                request.reviewed_decisions is not None
+                and [action.decision_type for action in actions] != request.reviewed_decisions
+            ):
+                raise ServiceError(
+                    "revision_conflict",
+                    "The proposed outcome changed. Review the correction again.",
+                )
+            if (
+                request.reviewed_targets is not None
+                and [action.related_memory_id or action.memory_id for action in actions]
+                != request.reviewed_targets
+            ):
+                raise ServiceError(
+                    "revision_conflict", "The affected memory changed. Review the correction again."
+                )
+            return {
+                "policy_actions": actions,
+                "decisions": _as_decisions(actions),
+                "consolidation_plans": consolidation_plans,
+            }
 
         def persist(state: GraphState) -> GraphState:
             persist_started = perf_counter()
@@ -565,7 +737,9 @@ class MemoryIngestionService:
             vectors = {
                 candidate.candidate_id: vector
                 for candidate, vector in zip(
-                    candidates, state.get("candidate_embeddings", []), strict=False
+                    state.get("admitted_candidates", []),
+                    state.get("candidate_embeddings", []),
+                    strict=True,
                 )
             }
             relation_by_id = {
@@ -591,8 +765,10 @@ class MemoryIngestionService:
                         )["candidates"]
                     ],
                     decisions=_as_decisions(actions),
+                    relation_assessments=state.get("relation_assessments", []),
                     memory_ids=[],
                     warnings=[],
+                    preview_revision=expected_revision,
                     trace=InteractionTrace(
                         steps=_steps(timings_with_persist()),
                         policy_version=MEMORYOS_POLICY_VERSION,
@@ -609,6 +785,7 @@ class MemoryIngestionService:
                 candidates=candidates,
                 memory_ids=memory_ids,
                 action_by_candidate=action_map,
+                relation_assessments=state.get("relation_assessments", []),
             )
             try:
                 with self.session_factory.begin() as session:
@@ -623,6 +800,7 @@ class MemoryIngestionService:
                         scope_id=request.scope_id,
                         expected_revision=expected_revision,
                     ):
+                        self._correction_reference(repo, request)
                         interaction = repo.insert_interaction(
                             scope_id=request.scope_id,
                             text=request.text,
@@ -650,7 +828,21 @@ class MemoryIngestionService:
                                 if relation
                                 else candidate.evidence_excerpt
                             )
-                            if action.decision_type is IngestDecisionType.CREATED:
+                            if relation and action.decision_type is IngestDecisionType.SUPERSEDED:
+                                evidence = relation.replacement_evidence or evidence
+                            if action.decision_type is IngestDecisionType.CONSOLIDATED:
+                                canonical_id = persist_consolidation(
+                                    session=session,
+                                    repo=repo,
+                                    plan=state["consolidation_plans"][candidate.candidate_id],
+                                    interaction_id=interaction.id,
+                                    confirmation_at=occurred_at,
+                                    provenance=request.source_ref,
+                                    evidence_excerpt=candidate.evidence_excerpt,
+                                )
+                                memory_ids.append(canonical_id)
+                                final_actions.append(replace(action, memory_id=canonical_id))
+                            elif action.decision_type is IngestDecisionType.CREATED:
                                 inserted = repo.insert_memory(
                                     scope_id=request.scope_id,
                                     content=candidate.content,
@@ -674,7 +866,7 @@ class MemoryIngestionService:
                                     memory_id=inserted.record.id,
                                     interaction_id=interaction.id,
                                     event_type=MemoryEventType.CREATED,
-                                    related_memory_id=None,
+                                    related_memory_id=action.related_memory_id,
                                     evidence_excerpt=evidence,
                                     relation=MemoryRelation.NEW,
                                     reason_code=action.reason_code,
@@ -835,6 +1027,7 @@ class MemoryIngestionService:
                                 )
                                 if decision.candidate_id
                             },
+                            relation_assessments=state.get("relation_assessments", []),
                         )
                         repo.update_interaction(
                             scope_id=request.scope_id,
@@ -852,6 +1045,7 @@ class MemoryIngestionService:
                                 CandidateMemory.model_validate(item) for item in trace["candidates"]
                             ],
                             decisions=final_decisions,
+                            relation_assessments=state.get("relation_assessments", []),
                             memory_ids=memory_ids,
                             warnings=[],
                             trace=InteractionTrace(
@@ -937,6 +1131,11 @@ class MemoryIngestionService:
                     )
                 return response
             except ScopeRevisionConflict as exc:
+                replay = self._existing_request(request, request_hash)
+                if replay is not None:
+                    return replay
+                if request.expected_scope_revision is not None:
+                    raise _db_error(exc) from exc
                 if attempt == 0:
                     continue
                 raise _db_error(exc) from exc

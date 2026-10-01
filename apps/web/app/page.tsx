@@ -10,6 +10,7 @@ import {
   Sparkles,
 } from "lucide-react";
 import Link from "next/link";
+import { useId } from "react";
 
 import { MetricCard } from "@/components/metric-card";
 import { ErrorState, LoadingState } from "@/components/status-state";
@@ -78,6 +79,7 @@ function OverviewContent({
 }: {
   data: Awaited<ReturnType<typeof getOverview>>;
 }) {
+  const glassId = useId();
   const total = data.type_counts.reduce((sum, item) => sum + item.count, 0);
   const counts = new Map(
     data.type_counts.map((item) => [item.memory_type, item.count]),
@@ -167,6 +169,33 @@ function OverviewContent({
                   viewBox="0 0 100 100"
                   aria-hidden="true"
                 >
+                  <defs>
+                    <linearGradient
+                      id={`${glassId}-reflection`}
+                      x1="0"
+                      y1="0"
+                      x2="1"
+                      y2="1"
+                    >
+                      <stop offset="0" stopColor="white" stopOpacity="0.85" />
+                      <stop
+                        offset="0.45"
+                        stopColor="white"
+                        stopOpacity="0.35"
+                      />
+                      <stop offset="1" stopColor="white" stopOpacity="0" />
+                    </linearGradient>
+                    <mask id={`${glassId}-ring`}>
+                      <circle
+                        cx="50"
+                        cy="50"
+                        r="41.5"
+                        fill="none"
+                        stroke="white"
+                        strokeWidth="16"
+                      />
+                    </mask>
+                  </defs>
                   {segments.map((segment) => (
                     <circle
                       className={`donut-segment ${typeTone(segment.type)}`}
@@ -184,13 +213,53 @@ function OverviewContent({
                       className={`donut-segment-streak ${typeTone(segment.type)}`}
                       cx="50"
                       cy="50"
-                      r="40.5"
+                      r="45.5"
                       pathLength="100"
-                      strokeDasharray="2.8 97.2"
-                      strokeDashoffset={-(segment.start + segment.share * 0.2)}
+                      strokeDasharray={`${segment.share * 0.55} ${100 - segment.share * 0.55}`}
+                      strokeDashoffset={-(segment.start + segment.share * 0.12)}
                       key={`${segment.type}-streak`}
                     />
                   ))}
+                  <g
+                    className="donut-reflections"
+                    mask={`url(#${glassId}-ring)`}
+                  >
+                    <path
+                      d="M 5 58 C 3 23 30 3 64 13"
+                      stroke={`url(#${glassId}-reflection)`}
+                      strokeWidth="3.2"
+                    />
+                    <path
+                      d="M 9 61 C 7 30 32 9 66 18"
+                      stroke={`url(#${glassId}-reflection)`}
+                      strokeWidth="0.8"
+                    />
+                    <path
+                      d="M 34 87 C 58 94 85 76 88 54"
+                      stroke={`url(#${glassId}-reflection)`}
+                      strokeWidth="1.2"
+                      opacity="0.4"
+                    />
+                  </g>
+                  <g className="donut-seams">
+                    {segments
+                      .filter((segment) => segment.share > 0)
+                      .map((segment) => (
+                        <g
+                          key={`${segment.type}-edge`}
+                          transform={`rotate(${segment.start * 3.6} 50 50)`}
+                        >
+                          <path
+                            d="M 50 0.5 V 16.5"
+                            className="donut-seam-shadow"
+                          />
+                          <path
+                            d="M 50.65 1 V 16.5"
+                            className="donut-seam-light"
+                          />
+                        </g>
+                      ))}
+                  </g>
                 </svg>
                 <span className="donut-shine" aria-hidden="true" />
                 <div className="donut-center">

@@ -41,7 +41,7 @@ from memoryos.db.errors import (
     ScopeNotFoundError,
     ScopeRevisionConflict,
 )
-from memoryos.db.models import Interaction, Memory, MemoryReview
+from memoryos.db.models import Interaction, Memory
 from memoryos.db.models import MemoryEvent as MemoryEventRow
 from memoryos.db.repositories import MemoryRepository, RecallCandidate
 from memoryos.domain.enums import (
@@ -50,7 +50,13 @@ from memoryos.domain.enums import (
     MemoryStatus,
     MemoryType,
 )
-from memoryos.domain.policies import MEMORYOS_POLICY_VERSION, rank_recall_candidates, require_utc
+from memoryos.domain.policies import (
+    MEMORYOS_POLICY_VERSION,
+    SCORE_WEIGHTS,
+    ScoredMemory,
+    rank_recall_candidates,
+    require_utc,
+)
 from memoryos.providers.errors import (
     ProviderOutputInvalid,
     ProviderTimeout,
@@ -364,7 +370,11 @@ class MemoryQueryService:
         )
         score_by_id = {item.memory.id: item for item in scored}
         naive = sorted(
-            (candidate for candidate in candidates if candidate.raw_similarity is not None),
+            (
+                candidate
+                for candidate in candidates
+                if candidate.raw_similarity is not None and candidate.record.id in score_by_id
+            ),
             key=lambda candidate: (
                 -max(0.0, candidate.raw_similarity or 0.0),
                 str(candidate.record.id),
@@ -372,6 +382,62 @@ class MemoryQueryService:
         )
         naive_rank = {candidate.record.id: index for index, candidate in enumerate(naive, start=1)}
         memoryos_rank = {item.memory.id: index for index, item in enumerate(scored, start=1)}
+
+        def movement_reason(
+            item: ScoredMemory,
+            delta: int | None,
+            naive_position: int | None,
+            memoryos_position: int | None,
+        ) -> str:
+            if delta is None or naive_position is None or memoryos_position is None:
+                return "This memory is outside one of the compared rankings."
+            if delta == 0:
+                return "The additional memory signals did not change this memory's rank."
+            if delta > 0:
+                passed_id = next(
+                    (
+                        candidate.record.id
+                        for candidate in reversed(naive[: naive_position - 1])
+                        if memoryos_rank[candidate.record.id] > memoryos_position
+                    ),
+                    None,
+                )
+                subject = "This memory"
+                comparison = "the vector result it passed"
+            else:
+                passed_id = next(
+                    (
+                        candidate.record.id
+                        for candidate in naive[naive_position:]
+                        if memoryos_rank[candidate.record.id] < memoryos_position
+                    ),
+                    None,
+                )
+                subject = "The memory that passed it"
+                comparison = "this memory"
+            if passed_id is None:
+                return "The combined score and stable tie breaks changed this memory's rank."
+            peer = score_by_id[passed_id]
+            better, worse = (item, peer) if delta > 0 else (peer, item)
+            advantages = [
+                (
+                    getattr(better.score, f"weighted_{name}")
+                    - getattr(worse.score, f"weighted_{name}"),
+                    name,
+                )
+                for name in ("importance", "recency", "reinforcement", "confidence")
+            ]
+            advantage, signal = max(advantages)
+            if advantage <= 0:
+                return "The combined score and stable tie breaks changed this memory's rank."
+            tail = (
+                " despite a lower semantic similarity."
+                if better.score.similarity < worse.score.similarity
+                else "."
+            )
+            return (
+                f"{subject} gains {advantage:.3f} more score from {signal} than {comparison}{tail}"
+            )
 
         def item_for(memory_id: UUID) -> RecallComparisonItem:
             candidate = next(
@@ -393,6 +459,9 @@ class MemoryQueryService:
                 memoryos_score=scored_memory.score,
                 rank_delta=delta,
                 explanation=scored_memory.explanation,
+                movement_reason=movement_reason(
+                    scored_memory, delta, naive_position, memoryos_position
+                ),
             )
 
         naive_ids = [candidate.record.id for candidate in naive[: request.limit]]
@@ -402,7 +471,8 @@ class MemoryQueryService:
             query=request.query,
             evaluated_at=evaluated_at,
             policy_version=MEMORYOS_POLICY_VERSION,
-            candidate_count=len(candidates),
+            score_weights=dict(SCORE_WEIGHTS),
+            candidate_count=len(scored),
             naive=[item_for(memory_id) for memory_id in naive_ids],
             memoryos=[item_for(memory_id) for memory_id in memoryos_ids],
         )
@@ -666,17 +736,7 @@ class MemoryQueryService:
                     )
                     or 0
                 )
-                unresolved_review_count = (
-                    session.scalar(
-                        select(func.count())
-                        .select_from(MemoryReview)
-                        .where(
-                            MemoryReview.scope_id == scope_id,
-                            MemoryReview.status == "pending",
-                        )
-                    )
-                    or 0
-                )
+                _, unresolved_review_count = repo.list_reviews(scope_id=scope_id, limit=1)
                 return OverviewResponse(
                     scope_id=scope_id,
                     active_memories=int(active_count),

@@ -1,6 +1,70 @@
 {
   "components": {
     "schemas": {
+      "AdmissionSignals": {
+        "additionalProperties": false,
+        "description": "Semantic observations proposed by extraction; policy decides admission.",
+        "properties": {
+          "content_kind": {
+            "enum": [
+              "information",
+              "greeting",
+              "acknowledgement",
+              "chitchat",
+              "question",
+              "one_off_request"
+            ],
+            "title": "Content Kind",
+            "type": "string"
+          },
+          "durability": {
+            "enum": [
+              "lasting",
+              "transient",
+              "uncertain"
+            ],
+            "title": "Durability",
+            "type": "string"
+          },
+          "evidence_source": {
+            "enum": [
+              "user",
+              "inferred",
+              "assistant"
+            ],
+            "title": "Evidence Source",
+            "type": "string"
+          },
+          "future_value": {
+            "enum": [
+              "personalization",
+              "reference",
+              "procedure",
+              "significant_event",
+              "none"
+            ],
+            "title": "Future Value",
+            "type": "string"
+          },
+          "specificity": {
+            "enum": [
+              "specific",
+              "vague"
+            ],
+            "title": "Specificity",
+            "type": "string"
+          }
+        },
+        "required": [
+          "durability",
+          "future_value",
+          "specificity",
+          "evidence_source",
+          "content_kind"
+        ],
+        "title": "AdmissionSignals",
+        "type": "object"
+      },
       "ApiHealth": {
         "additionalProperties": false,
         "properties": {
@@ -36,6 +100,16 @@
       "CandidateMemory": {
         "additionalProperties": false,
         "properties": {
+          "admission": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/AdmissionSignals"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
           "attribute_key": {
             "anyOf": [
               {
@@ -160,7 +234,8 @@
           "effective_at",
           "expires_at",
           "worth_remembering",
-          "skip_reason"
+          "skip_reason",
+          "admission"
         ],
         "title": "CandidateMemory",
         "type": "object"
@@ -224,7 +299,7 @@
               "type": "string"
             },
             "maxItems": 8,
-            "minItems": 3,
+            "minItems": 2,
             "title": "Source Memory Ids",
             "type": "array"
           }
@@ -234,6 +309,204 @@
           "source_memory_ids"
         ],
         "title": "ConsolidationRequest",
+        "type": "object"
+      },
+      "ContextMemory": {
+        "additionalProperties": false,
+        "properties": {
+          "content": {
+            "title": "Content",
+            "type": "string"
+          },
+          "context_key": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Context Key"
+          },
+          "id": {
+            "format": "uuid",
+            "title": "Id",
+            "type": "string"
+          },
+          "memory_type": {
+            "$ref": "#/components/schemas/MemoryType"
+          }
+        },
+        "required": [
+          "id",
+          "content",
+          "memory_type",
+          "context_key"
+        ],
+        "title": "ContextMemory",
+        "type": "object"
+      },
+      "ContextRequest": {
+        "additionalProperties": false,
+        "properties": {
+          "limit": {
+            "default": 3,
+            "maximum": 5.0,
+            "minimum": 1.0,
+            "title": "Limit",
+            "type": "integer"
+          },
+          "mode": {
+            "$ref": "#/components/schemas/ExecutionMode",
+            "default": "demo"
+          },
+          "query": {
+            "maxLength": 2000,
+            "minLength": 1,
+            "title": "Query",
+            "type": "string"
+          },
+          "scope_id": {
+            "format": "uuid",
+            "title": "Scope Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "scope_id",
+          "query"
+        ],
+        "title": "ContextRequest",
+        "type": "object"
+      },
+      "ContextResponse": {
+        "additionalProperties": false,
+        "properties": {
+          "answer": {
+            "title": "Answer",
+            "type": "string"
+          },
+          "memories_used": {
+            "items": {
+              "$ref": "#/components/schemas/ContextMemory"
+            },
+            "title": "Memories Used",
+            "type": "array"
+          },
+          "mode": {
+            "$ref": "#/components/schemas/ExecutionMode"
+          },
+          "model": {
+            "title": "Model",
+            "type": "string"
+          },
+          "query": {
+            "title": "Query",
+            "type": "string"
+          }
+        },
+        "required": [
+          "query",
+          "answer",
+          "memories_used",
+          "mode",
+          "model"
+        ],
+        "title": "ContextResponse",
+        "type": "object"
+      },
+      "CorrectionRequest": {
+        "additionalProperties": false,
+        "properties": {
+          "expected_scope_revision": {
+            "anyOf": [
+              {
+                "minimum": 0.0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Expected Scope Revision"
+          },
+          "idempotency_key": {
+            "anyOf": [
+              {
+                "maxLength": 255,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Idempotency Key"
+          },
+          "mode": {
+            "$ref": "#/components/schemas/ExecutionMode",
+            "default": "demo"
+          },
+          "preview": {
+            "default": true,
+            "title": "Preview",
+            "type": "boolean"
+          },
+          "reviewed_decisions": {
+            "anyOf": [
+              {
+                "items": {
+                  "$ref": "#/components/schemas/IngestDecisionType"
+                },
+                "maxItems": 5,
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Reviewed Decisions"
+          },
+          "reviewed_targets": {
+            "anyOf": [
+              {
+                "items": {
+                  "anyOf": [
+                    {
+                      "format": "uuid",
+                      "type": "string"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
+                "maxItems": 5,
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Reviewed Targets"
+          },
+          "scope_id": {
+            "format": "uuid",
+            "title": "Scope Id",
+            "type": "string"
+          },
+          "text": {
+            "maxLength": 2000,
+            "minLength": 1,
+            "title": "Text",
+            "type": "string"
+          }
+        },
+        "required": [
+          "scope_id",
+          "text"
+        ],
+        "title": "CorrectionRequest",
         "type": "object"
       },
       "DemoCatalogResponse": {
@@ -413,6 +686,17 @@
             ],
             "title": "Candidate Id"
           },
+          "canonical_content": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Canonical Content"
+          },
           "confidence": {
             "anyOf": [
               {
@@ -425,6 +709,17 @@
               }
             ],
             "title": "Confidence"
+          },
+          "consolidation_note": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Consolidation Note"
           },
           "decision_type": {
             "$ref": "#/components/schemas/IngestDecisionType"
@@ -460,6 +755,14 @@
               }
             ],
             "title": "Related Memory Id"
+          },
+          "source_memory_ids": {
+            "items": {
+              "format": "uuid",
+              "type": "string"
+            },
+            "title": "Source Memory Ids",
+            "type": "array"
           }
         },
         "required": [
@@ -469,7 +772,10 @@
           "related_memory_id",
           "reason_code",
           "reason_summary",
-          "confidence"
+          "confidence",
+          "source_memory_ids",
+          "consolidation_note",
+          "canonical_content"
         ],
         "title": "IngestDecision",
         "type": "object"
@@ -477,6 +783,7 @@
       "IngestDecisionType": {
         "enum": [
           "created",
+          "consolidated",
           "reinforced",
           "superseded",
           "disputed",
@@ -489,6 +796,30 @@
       "IngestInteractionRequest": {
         "additionalProperties": false,
         "properties": {
+          "correction_memory_id": {
+            "anyOf": [
+              {
+                "format": "uuid",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Correction Memory Id"
+          },
+          "expected_scope_revision": {
+            "anyOf": [
+              {
+                "minimum": 0.0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Expected Scope Revision"
+          },
           "idempotency_key": {
             "anyOf": [
               {
@@ -526,6 +857,44 @@
             "default": false,
             "title": "Preview",
             "type": "boolean"
+          },
+          "reviewed_decisions": {
+            "anyOf": [
+              {
+                "items": {
+                  "$ref": "#/components/schemas/IngestDecisionType"
+                },
+                "maxItems": 5,
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Reviewed Decisions"
+          },
+          "reviewed_targets": {
+            "anyOf": [
+              {
+                "items": {
+                  "anyOf": [
+                    {
+                      "format": "uuid",
+                      "type": "string"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
+                "maxItems": 5,
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Reviewed Targets"
           },
           "scope_id": {
             "format": "uuid",
@@ -568,6 +937,11 @@
             "title": "Candidates",
             "type": "array"
           },
+          "correction_commit_allowed": {
+            "default": false,
+            "title": "Correction Commit Allowed",
+            "type": "boolean"
+          },
           "decisions": {
             "items": {
               "$ref": "#/components/schemas/IngestDecision"
@@ -590,6 +964,24 @@
           },
           "mode": {
             "$ref": "#/components/schemas/ExecutionMode"
+          },
+          "preview_revision": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Preview Revision"
+          },
+          "relation_assessments": {
+            "items": {
+              "$ref": "#/components/schemas/RelationAssessment"
+            },
+            "title": "Relation Assessments",
+            "type": "array"
           },
           "scope_id": {
             "format": "uuid",
@@ -617,8 +1009,11 @@
           "mode",
           "candidates",
           "decisions",
+          "relation_assessments",
           "memory_ids",
           "warnings",
+          "preview_revision",
+          "correction_commit_allowed",
           "trace"
         ],
         "title": "IngestInteractionResponse",
@@ -740,6 +1135,17 @@
             "title": "Memory Id",
             "type": "string"
           },
+          "provenance": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Provenance"
+          },
           "reason_code": {
             "title": "Reason Code",
             "type": "string"
@@ -764,6 +1170,18 @@
             "format": "uuid",
             "title": "Scope Id",
             "type": "string"
+          },
+          "source_occurred_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Source Occurred At"
           }
         },
         "required": [
@@ -774,12 +1192,14 @@
           "event_type",
           "related_memory_id",
           "evidence_excerpt",
+          "provenance",
           "reason_code",
           "reason_summary",
           "before",
           "after",
           "memory_content",
-          "created_at"
+          "created_at",
+          "source_occurred_at"
         ],
         "title": "MemoryEvent",
         "type": "object"
@@ -1378,6 +1798,11 @@
           "memoryos_score": {
             "$ref": "#/components/schemas/RecallScoreBreakdown"
           },
+          "movement_reason": {
+            "default": "",
+            "title": "Movement Reason",
+            "type": "string"
+          },
           "naive_rank": {
             "anyOf": [
               {
@@ -1415,7 +1840,8 @@
           "naive_similarity",
           "memoryos_score",
           "rank_delta",
-          "explanation"
+          "explanation",
+          "movement_reason"
         ],
         "title": "RecallComparisonItem",
         "type": "object"
@@ -1459,6 +1885,13 @@
             "format": "uuid",
             "title": "Scope Id",
             "type": "string"
+          },
+          "score_weights": {
+            "additionalProperties": {
+              "type": "number"
+            },
+            "title": "Score Weights",
+            "type": "object"
           }
         },
         "required": [
@@ -1466,6 +1899,7 @@
           "query",
           "evaluated_at",
           "policy_version",
+          "score_weights",
           "naive",
           "memoryos",
           "candidate_count"
@@ -1727,6 +2161,101 @@
         "title": "RecallScoreBreakdown",
         "type": "object"
       },
+      "RelationAssessment": {
+        "additionalProperties": false,
+        "properties": {
+          "candidate_id": {
+            "title": "Candidate Id",
+            "type": "string"
+          },
+          "confidence": {
+            "maximum": 1.0,
+            "minimum": 0.0,
+            "title": "Confidence",
+            "type": "number"
+          },
+          "consolidation_source_ids": {
+            "items": {
+              "format": "uuid",
+              "type": "string"
+            },
+            "maxItems": 5,
+            "title": "Consolidation Source Ids",
+            "type": "array"
+          },
+          "evidence_excerpt": {
+            "maxLength": 1000,
+            "minLength": 1,
+            "title": "Evidence Excerpt",
+            "type": "string"
+          },
+          "reason_code": {
+            "maxLength": 100,
+            "minLength": 1,
+            "title": "Reason Code",
+            "type": "string"
+          },
+          "reason_summary": {
+            "maxLength": 500,
+            "minLength": 1,
+            "title": "Reason Summary",
+            "type": "string"
+          },
+          "related_memory_id": {
+            "anyOf": [
+              {
+                "format": "uuid",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Related Memory Id"
+          },
+          "relation": {
+            "$ref": "#/components/schemas/MemoryRelation"
+          },
+          "replacement_evidence": {
+            "anyOf": [
+              {
+                "maxLength": 1000,
+                "minLength": 1,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Replacement Evidence"
+          },
+          "value_comparison": {
+            "default": "uncertain",
+            "enum": [
+              "equivalent",
+              "incompatible",
+              "distinct",
+              "uncertain"
+            ],
+            "title": "Value Comparison",
+            "type": "string"
+          }
+        },
+        "required": [
+          "candidate_id",
+          "related_memory_id",
+          "relation",
+          "confidence",
+          "evidence_excerpt",
+          "reason_code",
+          "reason_summary",
+          "value_comparison",
+          "replacement_evidence",
+          "consolidation_source_ids"
+        ],
+        "title": "RelationAssessment",
+        "type": "object"
+      },
       "ResolveMemoryRequest": {
         "additionalProperties": false,
         "properties": {
@@ -1792,10 +2321,24 @@
               "keep_both",
               "use_new",
               "keep_existing",
-              "invalid"
+              "invalid",
+              "merge"
             ],
             "title": "Action",
             "type": "string"
+          },
+          "merged_content": {
+            "anyOf": [
+              {
+                "maxLength": 2000,
+                "minLength": 1,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Merged Content"
           },
           "reason": {
             "default": "Reviewed by owner",
@@ -1817,6 +2360,23 @@
           "candidate": {
             "$ref": "#/components/schemas/CandidateMemory"
           },
+          "candidate_evidence": {
+            "items": {
+              "$ref": "#/components/schemas/MemoryEvent"
+            },
+            "title": "Candidate Evidence",
+            "type": "array"
+          },
+          "candidate_memory": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/MemoryRecord"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
           "confidence": {
             "maximum": 1.0,
             "minimum": 0.0,
@@ -1828,9 +2388,26 @@
             "title": "Created At",
             "type": "string"
           },
+          "current_existing_memory": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/MemoryRecord"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
           "evidence_excerpt": {
             "title": "Evidence Excerpt",
             "type": "string"
+          },
+          "existing_evidence": {
+            "items": {
+              "$ref": "#/components/schemas/MemoryEvent"
+            },
+            "title": "Existing Evidence",
+            "type": "array"
           },
           "existing_memory": {
             "anyOf": [
@@ -1846,6 +2423,17 @@
             "format": "uuid",
             "title": "Id",
             "type": "string"
+          },
+          "keep_both_unavailable_reason": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Keep Both Unavailable Reason"
           },
           "kind": {
             "enum": [
@@ -1867,6 +2455,17 @@
             ],
             "title": "Memory Id"
           },
+          "merge_unavailable_reason": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Merge Unavailable Reason"
+          },
           "proposed_relation": {
             "$ref": "#/components/schemas/MemoryRelation"
           },
@@ -1885,7 +2484,8 @@
                   "keep_both",
                   "use_new",
                   "keep_existing",
-                  "invalid"
+                  "invalid",
+                  "merge"
                 ],
                 "type": "string"
               },
@@ -1917,6 +2517,16 @@
               }
             ],
             "title": "Resolved At"
+          },
+          "result_memory": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/MemoryRecord"
+              },
+              {
+                "type": "null"
+              }
+            ]
           },
           "scope_id": {
             "format": "uuid",
@@ -1956,7 +2566,14 @@
           "resolved_at",
           "resolution",
           "resolution_reason",
-          "memory_id"
+          "memory_id",
+          "candidate_memory",
+          "current_existing_memory",
+          "result_memory",
+          "existing_evidence",
+          "candidate_evidence",
+          "merge_unavailable_reason",
+          "keep_both_unavailable_reason"
         ],
         "title": "ReviewItem",
         "type": "object"
@@ -2456,6 +3073,59 @@
         ]
       }
     },
+    "/v1/memories/{memory_id}/correct": {
+      "post": {
+        "operationId": "correct_memory_v1_memories__memory_id__correct_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "memory_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Memory Id",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CorrectionRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/IngestInteractionResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Correct Memory",
+        "tags": [
+          "v1"
+        ]
+      }
+    },
     "/v1/memories/{memory_id}/forget": {
       "post": {
         "operationId": "forget_memory_v1_memories__memory_id__forget_post",
@@ -2755,6 +3425,47 @@
           }
         },
         "summary": "Compare Recall",
+        "tags": [
+          "v1"
+        ]
+      }
+    },
+    "/v1/recall/context": {
+      "post": {
+        "operationId": "recall_in_context_v1_recall_context_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ContextRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ContextResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Recall In Context",
         "tags": [
           "v1"
         ]

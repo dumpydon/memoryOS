@@ -18,8 +18,8 @@ from memoryos.contracts.review import ConsolidationRequest, ReviewItem
 from memoryos.db.errors import ScopeNotFoundError, ScopeRevisionConflict
 from memoryos.db.models import Memory, MemoryReview
 from memoryos.db.repositories import MemoryRepository
-from memoryos.domain.enums import ExecutionMode, MemoryRelation, MemoryStatus, MemoryType
-from memoryos.domain.policies import normalize_text
+from memoryos.domain.enums import ExecutionMode, MemoryEventType, MemoryRelation, MemoryStatus
+from memoryos.domain.policies import ConsolidationPlan, validate_consolidation
 from memoryos.services.errors import ServiceError
 from memoryos.services.review import _review_contract, _row_memory
 
@@ -69,21 +69,113 @@ def _cosine(left: list[float], right: list[float]) -> float:
     return dot / (left_norm * right_norm)
 
 
-def _consolidated_content(rows: list[Memory]) -> str:
-    """Compose only source-backed text; no inferred facts are introduced."""
-
-    ordered = sorted(rows, key=lambda row: (row.effective_at, str(row.id)))
-    unique: list[str] = []
-    for row in ordered:
-        text = " ".join(row.content.split())
-        if text and normalize_text(text) not in {normalize_text(item) for item in unique}:
-            unique.append(text)
-    body = " ".join(unique)
-    prefix = "Consolidated memory: "
-    available = MAX_CONTENT_CHARS - len(prefix)
-    if len(body) > available:
-        body = body[: max(1, available - 1)].rstrip() + "…"
-    return prefix + body
+def persist_consolidation(
+    *,
+    session: Session,
+    repo: MemoryRepository,
+    plan: ConsolidationPlan,
+    interaction_id: UUID | None = None,
+    confirmation_at: datetime | None = None,
+    provenance: str | None = None,
+    review_id: UUID | None = None,
+    evidence_excerpt: str | None = None,
+) -> UUID:
+    """Apply a validated plan inside the caller's existing scope mutation."""
+    scope_id = plan.canonical.scope_id
+    rows = list(
+        session.scalars(
+            select(Memory)
+            .where(
+                Memory.scope_id == scope_id,
+                Memory.id.in_([m.id for m in plan.sources]),
+            )
+            .order_by(Memory.id.asc())
+            .with_for_update()
+        )
+    )
+    snapshots = {m.id: m for m in plan.sources}
+    if len(rows) != len(snapshots) or any(
+        row.status is not MemoryStatus.ACTIVE or _row_memory(row) != snapshots[row.id]
+        for row in rows
+    ):
+        raise ServiceError(
+            "revision_conflict", "A consolidation source changed before persistence."
+        )
+    canonical_row = next(row for row in rows if row.id == plan.canonical.id)
+    carried_count = max(row.reinforcement_count for row in rows)
+    count = carried_count + (1 if confirmation_at is not None else 0)
+    confirmed = max(
+        [row.last_confirmed_at for row in rows] + ([confirmation_at] if confirmation_at else [])
+    )
+    inserted = repo.insert_memory(
+        scope_id=scope_id,
+        content=plan.canonical.content,
+        memory_type=plan.canonical.memory_type,
+        importance=max(m.importance for m in plan.sources),
+        confidence=min(m.confidence for m in plan.sources),
+        reinforcement_count=count,
+        embedding=_vector(canonical_row),
+        embedding_model=plan.canonical.embedding_model,
+        status=MemoryStatus.ACTIVE,
+        subject=plan.canonical.subject,
+        context_key=plan.canonical.context_key,
+        attribute_key=plan.canonical.attribute_key,
+        effective_at=plan.canonical.effective_at,
+        expires_at=plan.canonical.expires_at,
+        last_confirmed_at=confirmed,
+        why=[
+            f"consolidated from {len(rows)} equivalent memories",
+            "original statements and evidence preserved in source history",
+            "reinforcement carried forward conservatively; counts were not summed",
+        ],
+    )
+    repo.insert_event(
+        scope_id=scope_id,
+        memory_id=inserted.record.id,
+        interaction_id=interaction_id,
+        event_type=MemoryEventType.CREATED,
+        relation=MemoryRelation.NEW,
+        reason_code="memory_consolidated",
+        reason_summary="Consolidated — these memories express the same durable proposition.",
+        evidence_excerpt=evidence_excerpt or plan.canonical.content[:1000],
+        provenance=provenance,
+        after={
+            "source_memory_ids": [str(row.id) for row in rows],
+            "canonical_source_id": str(plan.canonical.id),
+            "carried_reinforcement_count": carried_count,
+            "new_confirmation": confirmation_at is not None,
+            "reinforcement_count": count,
+            "review_id": str(review_id) if review_id else None,
+        },
+    )
+    for row in rows:
+        repo.set_memory_state(
+            scope_id=scope_id,
+            memory_id=row.id,
+            status=MemoryStatus.SUPERSEDED,
+            superseded_by_id=inserted.record.id,
+        )
+        repo.insert_event(
+            scope_id=scope_id,
+            memory_id=row.id,
+            related_memory_id=inserted.record.id,
+            interaction_id=interaction_id,
+            event_type=MemoryEventType.SUPERSEDED,
+            reason_code="consolidation_source_preserved",
+            reason_summary=(
+                "Canonical memory replaces this source; "
+                "original evidence remains in history."
+            ),
+            evidence_excerpt=evidence_excerpt or row.content[:1000],
+            provenance=provenance,
+            before={"status": MemoryStatus.ACTIVE.value},
+            after={
+                "status": MemoryStatus.SUPERSEDED.value,
+                "superseded_by_id": str(inserted.record.id),
+                "review_id": str(review_id) if review_id else None,
+            },
+        )
+    return inserted.record.id
 
 
 class MemoryConsolidationService:
@@ -98,8 +190,8 @@ class MemoryConsolidationService:
 
     def propose(self, request: ConsolidationRequest) -> ReviewItem:
         source_ids = list(dict.fromkeys(request.source_memory_ids))
-        if len(source_ids) < 3 or len(source_ids) > 8:
-            raise ServiceError("invalid_request", "Choose between 3 and 8 source memories.")
+        if len(source_ids) < 2 or len(source_ids) > 8:
+            raise ServiceError("invalid_request", "Choose between 2 and 8 source memories.")
         try:
             with self.session_factory.begin() as session:
                 repo = MemoryRepository(session, self.settings)
@@ -155,8 +247,8 @@ class MemoryConsolidationService:
                         evidence_excerpt=candidate.evidence_excerpt,
                         reason_code="consolidation_candidate",
                         reason_summary=(
-                            "Highly similar semantic or episodic memories can be represented "
-                            "by one owner-approved summary; source memories remain preserved."
+                            "Equivalent memories can share one canonical statement; "
+                            "sources become historical after approval and retain their evidence."
                         ),
                         mode=request.mode,
                         review_id=uuid.uuid4(),
@@ -183,36 +275,6 @@ class MemoryConsolidationService:
                 "embedding_model_mismatch",
                 "All consolidation sources must use the requested embedding model.",
             )
-        memory_type = rows[0].memory_type
-        if memory_type not in {MemoryType.SEMANTIC, MemoryType.EPISODIC}:
-            raise ServiceError(
-                "invalid_request",
-                "Only semantic and episodic memories can be consolidated automatically.",
-            )
-        identity = (
-            normalize_text(rows[0].subject or ""),
-            normalize_text(rows[0].context_key or ""),
-            normalize_text(rows[0].attribute_key or ""),
-        )
-        if not all(identity):
-            raise ServiceError(
-                "invalid_request",
-                "Consolidation requires explicit subject, context, and attribute keys.",
-            )
-        if any(
-            row.memory_type is not memory_type
-            or (
-                normalize_text(row.subject or ""),
-                normalize_text(row.context_key or ""),
-                normalize_text(row.attribute_key or ""),
-            )
-            != identity
-            for row in rows[1:]
-        ):
-            raise ServiceError(
-                "invalid_request",
-                "Consolidation sources must describe one typed subject, context, and attribute.",
-            )
         pairwise: list[float] = []
         for index, left in enumerate(rows):
             for right in rows[index + 1 :]:
@@ -222,13 +284,27 @@ class MemoryConsolidationService:
                 "invalid_request",
                 "Source memories are not similar enough for a conservative proposal.",
             )
+        validation = validate_consolidation(
+            [_row_memory(row) for row in rows],
+            as_of=utc_now(),
+            automatic=False,
+        )
+        if validation.plan is None:
+            raise ServiceError("invalid_request", validation.reason)
 
     @staticmethod
     def _candidate(rows: list[Memory]) -> CandidateMemory:
-        latest = max(rows, key=lambda row: (row.effective_at, str(row.id)))
+        validation = validate_consolidation(
+            [_row_memory(row) for row in rows],
+            as_of=utc_now(),
+            automatic=False,
+        )
+        if validation.plan is None:
+            raise ServiceError("invalid_request", validation.reason)
+        latest = validation.plan.canonical
         confidence = min(row.confidence for row in rows)
         importance = max(row.importance for row in rows)
-        content = _consolidated_content(rows)
+        content = latest.content
         return CandidateMemory(
             candidate_id=f"consolidation-{uuid.uuid4().hex}",
             content=content,
@@ -240,7 +316,7 @@ class MemoryConsolidationService:
             confidence=confidence,
             evidence_excerpt=latest.content[:1000],
             effective_at=latest.effective_at,
-            expires_at=None,
+            expires_at=latest.expires_at,
             worth_remembering=True,
         )
 

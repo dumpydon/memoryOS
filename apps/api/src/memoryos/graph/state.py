@@ -12,7 +12,7 @@ from memoryos.contracts.ingestion import (
     RelationAssessment,
 )
 from memoryos.contracts.memory import MemoryRecord
-from memoryos.domain.policies import PolicyAction
+from memoryos.domain.policies import ConsolidationPlan, PolicyAction
 
 
 class GraphState(TypedDict, total=False):
@@ -24,10 +24,13 @@ class GraphState(TypedDict, total=False):
     embedding_model: str
     embedding_dimensions: int
     candidates: list[CandidateMemory]
+    admitted_candidates: list[CandidateMemory]
     candidate_embeddings: list[list[float]]
     related_memories: dict[str, list[MemoryRecord]]
     relation_assessments: list[RelationAssessment]
     policy_actions: list[PolicyAction]
+    consolidation_plans: dict[str, ConsolidationPlan]
+    consolidation_blocked_ids: list[UUID]
     decisions: list[IngestDecision]
     memory_ids: list[UUID]
     warnings: list[str]

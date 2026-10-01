@@ -3,7 +3,7 @@ from uuid import UUID
 
 import pytest
 
-from memoryos.contracts.ingestion import CandidateMemory, RelationAssessment
+from memoryos.contracts.ingestion import AdmissionSignals, CandidateMemory, RelationAssessment
 from memoryos.contracts.memory import MemoryRecord
 from memoryos.domain.enums import IngestDecisionType, MemoryRelation, MemoryStatus, MemoryType
 from memoryos.domain.policies import (
@@ -17,6 +17,7 @@ from memoryos.domain.policies import (
     reinforced_confidence,
     validate_candidate,
     validate_candidates,
+    validate_consolidation,
     validate_reinforcement,
     validate_relation,
 )
@@ -52,6 +53,13 @@ def candidate(
         evidence_excerpt=evidence_excerpt,
         effective_at=effective_at,
         worth_remembering=worth_remembering,
+        admission=AdmissionSignals(
+            durability="lasting",
+            future_value="personalization",
+            specificity="specific",
+            evidence_source="user",
+            content_kind="information",
+        ),
     )
 
 
@@ -103,6 +111,8 @@ def assessment(
     relation: MemoryRelation = MemoryRelation.REINFORCE,
     confidence: float = 0.9,
     evidence_excerpt: str = "Alex prefers tea",
+    value_comparison: str | None = None,
+    replacement_evidence: str | None = None,
 ) -> RelationAssessment:
     return RelationAssessment(
         candidate_id=candidate_id,
@@ -112,6 +122,9 @@ def assessment(
         evidence_excerpt=evidence_excerpt,
         reason_code="test",
         reason_summary="test relation",
+        value_comparison=value_comparison
+        or ("equivalent" if relation is MemoryRelation.REINFORCE else "incompatible"),
+        replacement_evidence=replacement_evidence,
     )
 
 
@@ -399,8 +412,8 @@ def test_reinforcement_rejects_different_context_even_when_values_overlap() -> N
         source,
         interaction_id=INTERACTION_ID,
     )
-    assert result.decision_type is IngestDecisionType.REJECTED
-    assert result.reason_code == "reinforcement_identity_mismatch"
+    assert result.decision_type is IngestDecisionType.CREATED
+    assert result.reason_code == "contextual_coexistence"
 
 
 def test_reinforcement_rejects_negation_and_replacement_language() -> None:
@@ -514,6 +527,7 @@ def test_explicit_newer_correction_can_supersede() -> None:
             relation=MemoryRelation.SUPERSEDE,
             confidence=0.9,
             evidence_excerpt="now prefers coffee",
+            replacement_evidence="Correction: Alex now prefers coffee instead of tea.",
         ),
         {"c1": newer},
         {MEMORY_ID: existing},
@@ -583,7 +597,8 @@ def test_dispute_requires_valid_same_identity_active_candidate() -> None:
         "Alex prefers coffee",
     )
     assert secret.decision_type is IngestDecisionType.SKIPPED
-    assert unrelated.decision_type is IngestDecisionType.REJECTED
+    assert unrelated.decision_type is IngestDecisionType.CREATED
+    assert unrelated.reason_code == "contextual_coexistence"
 
 
 def test_naive_timestamps_are_rejected_by_scoring() -> None:
@@ -603,6 +618,7 @@ def test_old_imported_correction_and_ambiguous_change_preserve_both() -> None:
             relation=MemoryRelation.SUPERSEDE,
             confidence=0.95,
             evidence_excerpt="now prefers coffee",
+            replacement_evidence="Imported correction: Alex now prefers coffee instead of tea.",
         ),
         {"c1": old},
         {MEMORY_ID: existing},
@@ -637,3 +653,288 @@ def test_same_similarity_ties_are_broken_by_similarity_then_uuid() -> None:
     second = memory(memory_id=second_id, content="two", subject="two", attribute_key="fact")
     ranked = rank_recall_candidates([second, first], {first_id: 0.5, second_id: 0.5}, AS_OF)
     assert [item.memory.id for item in ranked] == [first_id, second_id]
+
+
+@pytest.mark.parametrize(
+    "memory_type,future_value,content",
+    [
+        (MemoryType.PREFERENCE, "personalization", "I prefer concise code explanations."),
+        (MemoryType.SEMANTIC, "reference", "Atlas stores event timestamps in UTC."),
+        (
+            MemoryType.PROCEDURAL,
+            "procedure",
+            "To run schema migrations, use uv run alembic upgrade head.",
+        ),
+        (
+            MemoryType.EPISODIC,
+            "significant_event",
+            "Atlas launched its public memory API at the conference.",
+        ),
+    ],
+)
+def test_admission_accepts_specific_supported_information(memory_type, future_value, content):
+    item = candidate(content=content, evidence_excerpt=content).model_copy(
+        update={
+            "memory_type": memory_type,
+            "admission": AdmissionSignals.model_validate(
+                {
+                    "durability": "lasting",
+                    "future_value": future_value,
+                    "specificity": "specific",
+                    "evidence_source": "user",
+                    "content_kind": "information",
+                }
+            ),
+        }
+    )
+    result = validate_candidate(item, content)
+    assert result.accepted
+    assert result.action.reason_code == f"admitted_{memory_type.value}"
+
+
+@pytest.mark.parametrize(
+    "updates,reason",
+    [
+        ({"durability": "transient"}, "transient_information"),
+        ({"durability": "uncertain"}, "uncertain_durability"),
+        ({"future_value": "none"}, "no_future_value"),
+        ({"specificity": "vague"}, "vague_information"),
+        ({"evidence_source": "inferred"}, "unsupported_inference"),
+        ({"evidence_source": "assistant"}, "assistant_generated"),
+        ({"content_kind": "one_off_request"}, "temporary_request"),
+    ],
+)
+def test_admission_rejects_weak_signals_even_with_high_scores(updates, reason):
+    item = candidate(confidence=0.99, importance=0.99)
+    item = item.model_copy(update={"admission": item.admission.model_copy(update=updates)})
+    result = validate_candidate(item, "Alex prefers tea")
+    assert not result.accepted
+    assert result.action.reason_code == reason
+
+
+def test_admission_fails_closed_for_missing_signals_and_weak_confidence():
+    item = candidate().model_copy(update={"admission": None})
+    assert (
+        validate_candidate(item, "Alex prefers tea").action.reason_code
+        == "admission_signals_missing"
+    )
+    assert (
+        validate_candidate(candidate(confidence=0.79), "Alex prefers tea").action.reason_code
+        == "low_confidence"
+    )
+
+
+@pytest.mark.parametrize(
+    "source,replacement,confidence,comparison,status",
+    [
+        (
+            "Alex currently prefers coffee.",
+            "Alex currently prefers coffee.",
+            0.99,
+            "incompatible",
+            MemoryStatus.ACTIVE,
+        ),
+        (
+            "From now on use Cursor. Alex prefers coffee.",
+            "From now on use Cursor. Alex prefers coffee.",
+            0.99,
+            "incompatible",
+            MemoryStatus.ACTIVE,
+        ),
+        (
+            "Maybe Alex switched from tea to coffee.",
+            "Maybe Alex switched from tea to coffee.",
+            0.99,
+            "incompatible",
+            MemoryStatus.ACTIVE,
+        ),
+        (
+            "Alex did not switch from tea to coffee.",
+            "Alex did not switch from tea to coffee.",
+            0.99,
+            "incompatible",
+            MemoryStatus.ACTIVE,
+        ),
+        (
+            "Correction: Alex prefers coffee instead of tea.",
+            "Correction: Alex prefers coffee instead of tea.",
+            0.89,
+            "incompatible",
+            MemoryStatus.ACTIVE,
+        ),
+        (
+            "Correction: Alex prefers coffee instead of tea.",
+            "Correction: Alex prefers coffee instead of tea.",
+            0.99,
+            "uncertain",
+            MemoryStatus.ACTIVE,
+        ),
+        (
+            "Correction: Alex prefers coffee instead of tea.",
+            "Correction: Alex prefers coffee instead of tea.",
+            0.99,
+            "incompatible",
+            MemoryStatus.DISPUTED,
+        ),
+        (
+            "Alex prefers coffee.",
+            "Correction: Alex prefers coffee instead of tea.",
+            0.99,
+            "incompatible",
+            MemoryStatus.ACTIVE,
+        ),
+    ],
+)
+def test_supersession_needs_strong_claim_bound_replacement_evidence(
+    source, replacement, confidence, comparison, status
+):
+    incoming = candidate(content="Alex prefers coffee", evidence_excerpt=source, effective_at=AS_OF)
+    existing = memory(status=status, effective_at=AS_OF - timedelta(days=1))
+    result = validate_relation(
+        assessment(
+            relation=MemoryRelation.SUPERSEDE,
+            confidence=confidence,
+            evidence_excerpt=source,
+            replacement_evidence=replacement,
+            value_comparison=comparison,
+        ),
+        {"c1": incoming},
+        {MEMORY_ID: existing},
+        source,
+        interaction_id=INTERACTION_ID,
+    )
+    assert result.decision_type is IngestDecisionType.DISPUTED
+    assert existing.status is status
+
+
+def test_shared_attribute_words_cannot_prove_equivalent_editor_values():
+    source = "Alex's primary editor is Cursor."
+    incoming = candidate(content=source, evidence_excerpt=source, attribute_key="primary_editor")
+    existing = memory(
+        content="Alex's primary editor is VS Code.", attribute_key="editor_preference"
+    )
+    result = validate_relation(
+        assessment(evidence_excerpt=source, value_comparison="equivalent"),
+        {"c1": incoming},
+        {MEMORY_ID: existing},
+        source,
+        interaction_id=INTERACTION_ID,
+    )
+    assert result.decision_type is IngestDecisionType.REJECTED
+    assert result.reason_code == "semantic_proposition_mismatch"
+
+
+def test_new_proposal_cannot_duplicate_a_supported_paraphrase():
+    source = "Alex still prefers short explanations."
+    incoming = candidate(content=source, evidence_excerpt=source, attribute_key="explanation_style")
+    existing = memory(
+        content="Alex prefers concise explanations.", attribute_key="explanation_length"
+    )
+    result = validate_relation(
+        assessment(
+            relation=MemoryRelation.NEW,
+            related_memory_id=None,
+            evidence_excerpt=source,
+            value_comparison="equivalent",
+        ),
+        {"c1": incoming},
+        {MEMORY_ID: existing},
+        source,
+        interaction_id=INTERACTION_ID,
+    )
+    assert result.decision_type is IngestDecisionType.REINFORCED
+
+
+def test_repeated_disputed_value_cannot_create_another_conflict():
+    source = "Alex prefers coffee"
+    incoming = candidate(content=source, evidence_excerpt=source)
+    disputed_id = UUID("00000000-0000-0000-0000-000000000012")
+    result = validate_relation(
+        assessment(relation=MemoryRelation.DISPUTE, evidence_excerpt=source),
+        {"c1": incoming},
+        {
+            MEMORY_ID: memory(status=MemoryStatus.DISPUTED),
+            disputed_id: memory(
+                memory_id=disputed_id, content=source, status=MemoryStatus.DISPUTED
+            ),
+        },
+        source,
+        interaction_id=INTERACTION_ID,
+    )
+    assert result.decision_type is IngestDecisionType.SKIPPED
+    assert result.reason_code == "pending_conflict_already_represented"
+
+
+def test_supersession_requires_a_present_subject_not_two_missing_values():
+    source = "Correction: now prefer coffee instead of tea."
+    incoming = candidate(
+        content="Prefer coffee", subject=None, evidence_excerpt=source, effective_at=AS_OF
+    )
+    existing = memory(content="Prefer tea", subject=None)
+    result = validate_relation(
+        assessment(
+            relation=MemoryRelation.SUPERSEDE, evidence_excerpt=source, replacement_evidence=source
+        ),
+        {"c1": incoming},
+        {MEMORY_ID: existing},
+        source,
+    )
+    assert result.decision_type is IngestDecisionType.DISPUTED
+    assert result.reason_code == "ambiguous_supersede_identity"
+
+
+def consolidation_sources():
+    left = memory(
+        content="Alex prefers concise algorithm explanations.",
+        context_key="algorithms",
+        attribute_key="explanation_length",
+        confidence=0.95,
+    )
+    right = memory(
+        memory_id=UUID("00000000-0000-0000-0000-000000000013"),
+        content="Alex likes short, focused DSA explanations.",
+        context_key="algorithms",
+        attribute_key="explanation_style",
+        confidence=0.95,
+    )
+    incoming = candidate(
+        content="Alex prefers short, focused algorithm explanations.",
+        context_key="algorithms",
+        attribute_key="explanation_style",
+        confidence=0.95,
+    )
+    return left, right, incoming
+
+
+def test_consolidation_selects_a_complete_verbatim_source():
+    left, right, incoming = consolidation_sources()
+    result = validate_consolidation([left, right], candidate=incoming, as_of=AS_OF)
+    assert result.plan is not None
+    assert result.plan.canonical.content == right.content
+    assert {m.id for m in result.plan.sources} == {left.id, right.id}
+
+
+@pytest.mark.parametrize(
+    "updates,reason",
+    [
+        ({"context_key": "system_design"}, "contexts differ"),
+        ({"content": "Alex uses FastAPI for MemoryOS."}, "distinct or uncertain knowledge"),
+        (
+            {"content": "Alex prefers detailed algorithm explanations."},
+            "distinct or uncertain knowledge",
+        ),
+        ({"content": "Alex prefers concise explanations without theory."}, "human judgment"),
+        ({"status": MemoryStatus.DISPUTED}, "only active"),
+        ({"status": MemoryStatus.FORGOTTEN}, "only active"),
+        ({"confidence": 0.85}, "not strong enough"),
+    ],
+)
+def test_consolidation_refuses_unsafe_or_ambiguous_overlap(updates, reason):
+    left, right, incoming = consolidation_sources()
+    result = validate_consolidation(
+        [left, right.model_copy(update=updates)],
+        candidate=incoming,
+        as_of=AS_OF,
+    )
+    assert result.plan is None
+    assert reason in result.reason

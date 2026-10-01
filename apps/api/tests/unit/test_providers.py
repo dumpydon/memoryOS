@@ -6,7 +6,7 @@ from uuid import UUID
 import pytest
 
 from memoryos.config import Settings
-from memoryos.contracts.ingestion import CandidateMemory
+from memoryos.contracts.ingestion import AdmissionSignals, CandidateMemory
 from memoryos.contracts.memory import MemoryRecord
 from memoryos.domain.enums import MemoryRelation, MemoryStatus, MemoryType
 from memoryos.providers.demo import DemoEmbeddingProvider, DemoStructuredProvider
@@ -128,6 +128,13 @@ def test_live_relation_output_requires_every_candidate_once() -> None:
         importance=0.8,
         confidence=0.8,
         evidence_excerpt="prefers concise answers",
+        admission=AdmissionSignals(
+            durability="lasting",
+            future_value="personalization",
+            specificity="specific",
+            evidence_source="user",
+            content_kind="information",
+        ),
     )
     with pytest.raises(ProviderOutputInvalid, match="missing or duplicated"):
         provider.assess_relations(candidates=[candidate], related_memories=[])
@@ -146,13 +153,20 @@ def test_live_candidate_parsed_output_is_pydantic_validated() -> None:
         importance=0.8,
         confidence=0.8,
         evidence_excerpt="prefers concise answers",
+        admission=AdmissionSignals(
+            durability="lasting",
+            future_value="personalization",
+            specificity="specific",
+            evidence_source="user",
+            content_kind="information",
+        ),
     )
     provider._client = cast(
         Any,
         SimpleNamespace(
             responses=SimpleNamespace(
                 parse=lambda **kwargs: SimpleNamespace(
-                    output_parsed=CandidateBatch(candidates=[candidate])
+                    output_parsed=CandidateBatch(candidates=[candidate.model_dump()])
                 )
             )
         ),
@@ -196,11 +210,18 @@ def test_live_structured_refusal_and_incomplete_outputs_fail_closed() -> None:
         importance=0.8,
         confidence=0.8,
         evidence_excerpt="prefers concise answers",
+        admission=AdmissionSignals(
+            durability="lasting",
+            future_value="personalization",
+            specificity="specific",
+            evidence_source="user",
+            content_kind="information",
+        ),
     )
     for response in (
         SimpleNamespace(
             status="incomplete",
-            output_parsed=CandidateBatch(candidates=[candidate]),
+            output_parsed=CandidateBatch(candidates=[candidate.model_dump()]),
         ),
         SimpleNamespace(
             output=[SimpleNamespace(type="refusal", refusal="not available")],
@@ -209,9 +230,7 @@ def test_live_structured_refusal_and_incomplete_outputs_fail_closed() -> None:
         provider._client = cast(
             Any,
             SimpleNamespace(
-                responses=SimpleNamespace(
-                    parse=lambda response=response, **kwargs: response
-                )
+                responses=SimpleNamespace(parse=lambda response=response, **kwargs: response)
             ),
         )
         with pytest.raises(ProviderOutputInvalid):
@@ -236,6 +255,8 @@ def test_live_relation_prompt_contains_original_source_context() -> None:
                         "evidence_excerpt": "prefer concise answers",
                         "reason_code": "new",
                         "reason_summary": "No related memory was supplied.",
+                        "value_comparison": "distinct",
+                        "replacement_evidence": None,
                     }
                 ]
             )
@@ -262,9 +283,7 @@ def test_live_relation_prompt_contains_original_source_context() -> None:
         related_memories=[],
         source_text="Atlas says: I prefer concise answers.",
     )
-    request_text = "\n".join(
-        str(message.get("content", "")) for message in captured["input"]
-    )
+    request_text = "\n".join(str(message.get("content", "")) for message in captured["input"])
     assert "<source_interaction>" in request_text
     assert "I prefer concise answers" in request_text
 
@@ -274,3 +293,16 @@ def test_live_structured_envelopes_forbid_unknown_fields() -> None:
         CandidateBatch.model_validate({"candidates": [], "unexpected": "value"})
     with pytest.raises(ValueError):
         CandidateBatch.model_validate({})
+
+
+def test_live_extraction_requires_structured_admission_observations():
+    candidate = CandidateMemory(
+        candidate_id="missing-admission",
+        content="Atlas uses PostgreSQL.",
+        memory_type=MemoryType.SEMANTIC,
+        importance=0.9,
+        confidence=0.99,
+        evidence_excerpt="Atlas uses PostgreSQL.",
+    )
+    with pytest.raises(ValueError):
+        CandidateBatch.model_validate({"candidates": [candidate.model_dump(exclude={"admission"})]})

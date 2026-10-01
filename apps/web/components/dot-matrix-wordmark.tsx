@@ -143,11 +143,14 @@ export function DotMatrixWordmark() {
     );
     intersectionObserver.observe(section);
 
-    const resizeObserver = new ResizeObserver(() => {
+    const scheduleRebuild = () => {
       window.clearTimeout(resizeTimer);
       resizeTimer = window.setTimeout(rebuild, 120);
-    });
+    };
+    const resizeObserver = new ResizeObserver(scheduleRebuild);
     resizeObserver.observe(section);
+    // Browser zoom can change devicePixelRatio without changing the capped CSS box.
+    window.addEventListener("resize", scheduleRebuild);
 
     const onMotionChange = () => {
       stop();
@@ -165,6 +168,7 @@ export function DotMatrixWordmark() {
       stop();
       intersectionObserver.disconnect();
       resizeObserver.disconnect();
+      window.removeEventListener("resize", scheduleRebuild);
       reducedMotion.removeEventListener("change", onMotionChange);
       window.clearTimeout(resizeTimer);
     };
